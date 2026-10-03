@@ -1,0 +1,24 @@
+name: Validate and build Roblox game
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: CompeyDev/setup-rokit@v0.2.1
+      - name: Check game logic and Roblox properties
+        run: lune run tests/run.luau
+      - name: Build complete Roblox place
+        run: |
+          argon build default.project.json --output build/DontPressTheButton.rbxlx --xml
+          lune run scripts/build.luau
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DontPressTheButton
+          path: |
+            build/DontPressTheButton.rbxl
+            build/DontPressTheButton.rbxlx

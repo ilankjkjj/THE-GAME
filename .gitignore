@@ -1,0 +1,10 @@
+/build/
+/.tools/
+/sourcemap.json
+/.argon/
+*.rbxl
+*.rbxlx
+*.rbxl.lock
+*.log
+.DS_Store
+Thumbs.db

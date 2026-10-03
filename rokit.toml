@@ -1,0 +1,3 @@
+[tools]
+argon = "argon-rbx/argon@2.0.29"
+lune = "lune-org/lune@0.10.5"

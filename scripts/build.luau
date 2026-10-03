@@ -1,0 +1,12 @@
+local fs = require("@lune/fs")
+local roblox = require("@lune/roblox")
+local Environment = require("./RobloxEnvironment")
+local source = "build/DontPressTheButton.rbxlx"
+assert(fs.isFile(source), "Run argon build default.project.json -o build/DontPressTheButton.rbxlx --xml first")
+local game = roblox.deserializePlace(fs.readFile(source))
+local environment = Environment.new(game)
+environment.load("src/server/World.luau").build()
+environment.Workspace.CurrentCamera.CFrame = roblox.CFrame.lookAt(roblox.Vector3.new(75, 80, 100), roblox.Vector3.new(0, 4, 0))
+fs.writeFile("build/DontPressTheButton.rbxl", roblox.serializePlace(game))
+fs.writeFile(source, roblox.serializePlace(game, true))
+print("Built complete editor-ready room: build/DontPressTheButton.rbxl")

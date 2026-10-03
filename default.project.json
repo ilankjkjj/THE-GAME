@@ -1,0 +1,36 @@
+{
+  "name": "DONT PRESS THE BUTTON",
+  "host": "127.0.0.1",
+  "port": 8000,
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": { "Shared": { "$path": "src/shared" } },
+    "ServerScriptService": { "Server": { "$path": "src/server" } },
+    "StarterPlayer": {
+      "$properties": { "CharacterWalkSpeed": 22 },
+      "StarterPlayerScripts": { "Client": { "$path": "src/client" } }
+    },
+    "Workspace": {
+      "$keepUnknowns": true,
+      "$properties": { "FilteringEnabled": true },
+      "EditorFloor": {
+        "$className": "Part",
+        "$properties": {
+          "Anchored": true, "Size": [100, 2, 100], "Position": [0, -1, 0],
+          "Color": [0.075, 0.09, 0.125], "Material": "SmoothPlastic"
+        }
+      },
+      "EditorSpawn": {
+        "$className": "SpawnLocation",
+        "$properties": { "Anchored": true, "Neutral": true, "Duration": 3, "Size": [8, 1, 8], "Position": [0, 0.5, 25] }
+      }
+    },
+    "Lighting": {
+      "$properties": {
+        "Ambient": [0.35, 0.38, 0.48], "OutdoorAmbient": [0.35, 0.38, 0.48],
+        "Brightness": 2, "ClockTime": 17, "GlobalShadows": true
+      }
+    },
+    "SoundService": { "$properties": { "RespectFilteringEnabled": true } }
+  }
+}
