@@ -16,19 +16,20 @@
       "EditorFloor": {
         "$className": "Part",
         "$properties": {
-          "Anchored": true, "Size": [100, 2, 100], "Position": [0, -1, 0],
-          "Color": [0.075, 0.09, 0.125], "Material": "SmoothPlastic"
+          "Anchored": true, "Size": [100, 4, 80], "Position": [220, 8, 0],
+          "Color": [0.467, 0.792, 0.435], "Material": "Grass"
         }
       },
       "EditorSpawn": {
         "$className": "SpawnLocation",
-        "$properties": { "Anchored": true, "Neutral": true, "Duration": 3, "Size": [8, 1, 8], "Position": [0, 0.5, 25] }
+        "$properties": { "Anchored": true, "Neutral": true, "Duration": 0, "Size": [8, 0.2, 8], "Position": [220, 10.2, 15], "Color": [0.169, 0.745, 0.702] }
       }
     },
     "Lighting": {
       "$properties": {
-        "Ambient": [0.35, 0.38, 0.48], "OutdoorAmbient": [0.35, 0.38, 0.48],
-        "Brightness": 2, "ClockTime": 17, "GlobalShadows": true
+        "Ambient": [0.569, 0.643, 0.682], "OutdoorAmbient": [0.686, 0.745, 0.745],
+        "Brightness": 2.8, "ClockTime": 13.8, "GlobalShadows": true,
+        "ColorShift_Top": [1, 0.898, 0.753], "ExposureCompensation": 0.08
       }
     },
     "SoundService": { "$properties": { "RespectFilteringEnabled": true } }

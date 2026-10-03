@@ -8,7 +8,7 @@ local function number(value, default)
 end
 function Profile.new(startingCoins)
 	return {
-		Version = 1, Coins = startingCoins, Points = 0, Presses = 0,
+		Version = 2, Coins = startingCoins, Points = 0, Presses = 0, Wins = 0, Rounds = 0,
 		Owned = { skin_classic = true }, Equipped = { Skin = "skin_classic" },
 	}
 end
@@ -17,7 +17,7 @@ function Profile.normalize(raw, catalog, startingCoins)
 	if type(raw) ~= "table" then
 		return data
 	end
-	for _, key in ipairs({ "Coins", "Points", "Presses" }) do
+	for _, key in ipairs({ "Coins", "Points", "Presses", "Wins", "Rounds" }) do
 		data[key] = number(raw[key], data[key])
 	end
 	if type(raw.Owned) == "table" then
@@ -39,7 +39,7 @@ function Profile.normalize(raw, catalog, startingCoins)
 end
 function Profile.copy(data)
 	return {
-		Version = data.Version, Coins = data.Coins, Points = data.Points, Presses = data.Presses,
+		Version = data.Version, Coins = data.Coins, Points = data.Points, Presses = data.Presses, Wins = data.Wins, Rounds = data.Rounds,
 		Owned = table.clone(data.Owned), Equipped = table.clone(data.Equipped),
 	}
 end

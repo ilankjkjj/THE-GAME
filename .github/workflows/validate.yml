@@ -11,7 +11,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: CompeyDev/setup-rokit@v0.2.1
       - name: Check game logic and Roblox properties
-        run: lune run tests/run.luau
+        run: |
+          lune run tests/run.luau
+          lune run tests/events.luau
       - name: Build complete Roblox place
         run: |
           argon build default.project.json --output build/DontPressTheButton.rbxlx --xml

@@ -12,6 +12,7 @@ local Data = { Records = {}, Closing = false }
 local persistent = not RunService:IsStudio() or Config.PersistenceInStudio
 local store = persistent and DataStoreService:GetDataStore(Config.ProfileStore) or nil
 local ordered = persistent and DataStoreService:GetOrderedDataStore(Config.LeaderboardStore) or nil
+local winStore = persistent and DataStoreService:GetOrderedDataStore(Config.WinsStore) or nil
 local sessionId = game.JobId .. ":" .. HttpService:GenerateGUID(false)
 
 function Data.init(remotes)
@@ -35,6 +36,7 @@ function Data.push(player)
 	local stats = player:FindFirstChild("leaderstats")
 	if stats then
 		stats.Presses.Value = data.Presses
+		stats.Wins.Value = data.Wins
 		stats.Coins.Value = data.Coins
 		stats["Button Points"].Value = data.Points
 	end
@@ -84,12 +86,16 @@ function Data.load(player)
 	end
 	local stats = Instance.new("Folder")
 	stats.Name = "leaderstats"
-	for _, name in ipairs({ "Presses", "Coins", "Button Points" }) do
+	for _, name in ipairs({ "Wins", "Presses", "Coins", "Button Points" }) do
 		local value = Instance.new("IntValue")
 		value.Name = name
 		value.Parent = stats
 	end
 	stats.Parent = player
+	local status = Instance.new("StringValue")
+	status.Name = "Status"
+	status.Value = "Lobby"
+	status.Parent = stats
 	Data.push(player)
 end
 function Data.award(player, coins, points)
@@ -102,6 +108,17 @@ function Data.award(player, coins, points)
 end
 function Data.awardAll(coins, points)
 	for player in pairs(Data.Records) do Data.award(player, coins, points) end
+end
+function Data.finishRound(player, won, survived)
+	local data = Data.get(player)
+	if not data then return end
+	data.Rounds += 1
+	if won then data.Wins += 1 end
+	if survived then
+		Data.award(player, won and Config.WinnerCoins or 40, won and Config.WinnerPoints or 8)
+	else
+		Data.push(player)
+	end
 end
 function Data.save(player, release)
 	local record = Data.Records[player]
@@ -137,6 +154,9 @@ function Data.save(player, release)
 				ordered:UpdateAsync(tostring(player.UserId), function(previous)
 					return math.max(previous or 0, snapshot.Presses)
 				end)
+				winStore:UpdateAsync(tostring(player.UserId), function(previous)
+					return math.max(previous or 0, snapshot.Wins)
+				end)
 			end)
 			if not ok then warn("[Button] Leaderboard write failed: " .. tostring(err)) end
 		else
@@ -154,13 +174,13 @@ function Data.top()
 	if not persistent then
 		local entries = {}
 		for player, record in pairs(Data.Records) do
-			table.insert(entries, { UserId = player.UserId, Name = player.DisplayName, Presses = record.Profile.Presses })
+			table.insert(entries, { UserId = player.UserId, Name = player.DisplayName, Presses = record.Profile.Presses, Wins = record.Profile.Wins })
 		end
-		table.sort(entries, function(a, b) return a.Presses > b.Presses end)
+		table.sort(entries, function(a, b) if a.Wins == b.Wins then return a.Presses > b.Presses end; return a.Wins > b.Wins end)
 		while #entries > Config.LeaderboardSize do table.remove(entries) end
 		return entries, "STUDIO SESSION"
 	end
-	local ok, pages = pcall(function() return ordered:GetSortedAsync(false, Config.LeaderboardSize) end)
+	local ok, pages = pcall(function() return winStore:GetSortedAsync(false, Config.LeaderboardSize) end)
 	if not ok then return nil, "Leaderboard temporarily unavailable" end
 	local entries = {}
 	for _, entry in ipairs(pages:GetCurrentPage()) do
@@ -172,9 +192,9 @@ function Data.top()
 				name = success and result or ("Player " .. userId)
 				if success then Data.NameCache = Data.NameCache or {}; Data.NameCache[userId] = name end
 			end
-			table.insert(entries, { UserId = userId, Name = name, Presses = entry.value })
+			table.insert(entries, { UserId = userId, Name = name, Wins = entry.value, Presses = 0 })
 		end
 	end
-	return entries, "GLOBAL • MOST BUTTON PRESSES"
+	return entries, "GLOBAL • MOST SURVIVAL WINS"
 end
 return Data

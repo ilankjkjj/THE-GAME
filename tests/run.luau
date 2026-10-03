@@ -5,6 +5,7 @@ local Catalog = require("../src/shared/Catalog")
 local Profile = require("../src/shared/Profile")
 local Economy = require("../src/shared/Economy")
 local Rules = require("../src/shared/Rules")
+local RoundRules = require("../src/shared/RoundRules")
 local Environment = require("../scripts/RobloxEnvironment")
 local roblox = require("@lune/roblox")
 local passed = 0
@@ -97,17 +98,27 @@ test("Presses require a loaded, living, nearby player and expired cooldown", fun
 	assert(not Rules.canPress(10, 11, 1, true, true, Config))
 	assert(Rules.canPress(10, 10, 15, true, true, Config))
 end)
-test("Exactly the 99th accepted press triggers the special event", function()
-	local remaining = Config.SpecialEvery
-	for index = 1, 99 do
-		local nextValue, special, duration = Rules.advance(remaining, Config)
-		remaining = nextValue
-		eq(special, index == 99)
-		if special then eq(duration, 30) end
-	end
-	eq(remaining, 0)
-	remaining = Config.SpecialEvery
-	local nextValue, special = Rules.advance(remaining, Config); eq(nextValue, 98); eq(special, false)
+test("Rounds distinguish last survivor, a draw, solo completion, and sudden death", function()
+	eq(RoundRules.outcome(3, 5, false), "Continue")
+	eq(RoundRules.outcome(1, 5, false), "Winner")
+	eq(RoundRules.outcome(0, 5, false), "Draw")
+	eq(RoundRules.outcome(1, 1, false), "Continue")
+	eq(RoundRules.outcome(1, 1, true), "SoloSurvived")
+	eq(RoundRules.outcome(2, 5, true), "SuddenDeath")
+end)
+test("Lobby readiness and threat progression are bounded", function()
+	assert(not RoundRules.canStart(0, Config)); assert(RoundRules.canStart(1, Config))
+	eq(RoundRules.threat(0, Config), 1); eq(RoundRules.threat(999, Config), 5)
+	eq(RoundRules.status(false, true, false), "Queued")
+	eq(RoundRules.status(true, true, false), "Playing")
+	assert(not Rules.canPress(10, 0, 1, true, true, Config, false))
+end)
+test("Existing version-one saves migrate without losing progress or ownership", function()
+	local old = Profile.new(999); old.Version = 1; old.Wins = nil; old.Rounds = nil
+	old.Owned.pet_chicken = true; old.Equipped.Pet = "pet_chicken"; old.Presses = 45
+	local data = Profile.normalize(old, Catalog, 30)
+	eq(data.Wins, 0); eq(data.Rounds, 0); eq(data.Presses, 45); eq(data.Coins, 999)
+	eq(data.Equipped.Pet, "pet_chicken"); eq(data.Version, 2)
 end)
 local environment = Environment.new()
 local world
@@ -118,47 +129,43 @@ test("The room constructs using valid Roblox classes and properties", function()
 	eq(world.Prompt.MaxActivationDistance, Config.PressDistance)
 	local spawns = 0
 	for _, instance in ipairs(world.Root:GetDescendants()) do if instance:IsA("SpawnLocation") then spawns += 1 end end
-	eq(spawns, 4)
+	assert(spawns >= 2)
+	eq(#world.ArenaSpawns, 12); eq(#world.Platforms, 12)
+	assert(world.LobbySpawn.X > 150 and world.JoinPrompt)
 end)
-test("World themes restore and counters reflect special events", function()
+test("World themes and lobby round displays restore correctly", function()
 	local original = world.Floor.Color
 	world.theme("Cosmic"); assert(world.Floor.Color ~= original)
 	world.theme("Normal"); eq(world.Floor.Color, original)
-	world.counter({ Special = false, Remaining = 42, ReadyAt = 0, Cost = 5 })
-	assert(world.CounterLabel.Text:find("42")); assert(world.Prompt.ActionText:find("5"))
+	world.counter({ Phase = "Round", RoundNumber = 3, AliveCount = 4, RoundPlayers = 12, ReadyAt = 0, QueuedCount = 2 })
+	assert(world.RoundLabel.Text ~= "")
+	world.counter({ Phase = "Waiting", ReadyAt = 0, QueuedCount = 0, AliveCount = 0 })
+	eq(world.Prompt.Enabled, false)
 end)
-test("All thirteen events register with unique IDs and valid durations", function()
+test("At least twenty-four survival events register with unique IDs and valid durations", function()
 	local events = environment.load("src/server/Events.luau")
-	eq(#events.Definitions, 13)
+	assert(#events.Definitions >= 24)
 	local seen = {}
 	for _, event in ipairs(events.Definitions) do assert(not seen[event.Id]); seen[event.Id] = true; assert(event.Duration > 0 and type(event.Run) == "function") end
 end)
-test("Temporary visual events and the special event clean up their world effects", function()
-	local events = environment.load("src/server/Events.luau")
-	local awardedCoins, awardedPoints = 0, 0
-	local context = { World = world, State = {}, Data = { awardAll = function(coins, points) awardedCoins += coins; awardedPoints += points end }, Remotes = { Toast = { FireAllClients = function() end } } }
-	for _, event in ipairs(events.Definitions) do
-		if table.find({ "chicken", "rain", "coins", "remodel" }, event.Id) then
-			local cleanup = event.Run(context)
-			assert(#world.Effects:GetChildren() > 0)
-			cleanup(); eq(#world.Effects:GetChildren(), 0)
-		end
-	end
-	local cleanup = events.special(context)
-	eq(awardedCoins, 100); eq(awardedPoints, 25)
-	eq(environment.Workspace.Gravity, 90)
-	cleanup(); eq(#world.Effects:GetChildren(), 0); assert(math.abs(environment.Workspace.Gravity - 196.2) < 0.001)
+test("Arena resets restore temporary island changes", function()
+	local platform = world.Platforms[1]
+	local size, transparency, canCollide = platform.Size, platform.Transparency, platform.CanCollide
+	platform.Size = roblox.Vector3.new(5, 3, 5); platform.Transparency = 1; platform.CanCollide = false
+	world.resetArena()
+	eq(platform.Size, size); eq(platform.Transparency, transparency); eq(platform.CanCollide, canCollide)
 end)
 test("Desktop and mobile HUD, shop, and leaderboard use valid UI properties", function()
 	local UI = environment.load("src/client/UI.luau")
-	local ui = UI.new({ Press = function() end, Shop = function() end, Emote = function() end })
+	local ui = UI.new({ Press = function() end, Shop = function() end, Emote = function() end, Queue = function() end, Spectate = function() end })
 	ui:profile(Profile.new(30), 1, false)
-	ui:state({ Remaining = 99, Special = false, EventName = "WAITING", EventDescription = "Press the button", ReadyAt = 0, Cost = 0 })
+	ui:state({ Phase = "Intermission", PhaseEndsAt = 115, EventName = "BOARDING", EventDescription = "Join the next round", ReadyAt = 0, AliveCount = 0, LobbyCount = 2, QueuedCount = 2, Roster = { { UserId = 1, Name = "TestPlayer", Status = "Queued", Role = "Lobby", Wins = 3, Presses = 15 } } })
 	for _, size in ipairs({ { 1280, 720 }, { 390, 844 }, { 844, 390 } }) do
 		environment.viewport(unpack(size)); ui:resize()
 		ui:open("Shop"); ui:renderShop(); assert(ui.Panel.Visible)
-		ui:leaders({ { Name = "TestPlayer", Presses = 1234 } }, "GLOBAL")
+		ui:leaders({ { Name = "TestPlayer", Wins = 12, Presses = 1234 } }, "GLOBAL WINS")
 		ui:open("Leaderboard"); ui:tick(true); ui:close()
+		ui:open("Roster"); ui:close()
 		eq(ui.Panel.Visible, false)
 	end
 end)
@@ -237,5 +244,118 @@ test("Studio practice mode never touches persistent stores", function()
 	local h = dataHarness(true); local player = h.Player(106)
 	h.Data.load(player); assert(h.Data.get(player))
 	h.Data.save(player, true); eq(h.Accesses(), 0); eq(h.Stored.u_106, nil)
+end)
+test("Competitive wins are saved; solo survival never farms competitive wins", function()
+	local h = dataHarness(true); local player = h.Player(107)
+	h.Data.load(player)
+	h.Data.finishRound(player, false, true)
+	eq(h.Data.get(player).Wins, 0); eq(h.Data.get(player).Rounds, 1)
+	eq(h.Data.get(player).Coins, 70); eq(h.Data.get(player).Points, 8)
+	h.Data.finishRound(player, true, true)
+	eq(h.Data.get(player).Wins, 1); eq(h.Data.get(player).Rounds, 2)
+	eq(h.Data.get(player).Coins, 190); eq(h.Data.get(player).Points, 28)
+end)
+local function roundHarness(count)
+	local env = Environment.new()
+	local players = env.Game:GetService("Players")
+	env.Services.Players = players
+	local profiles, outcomes, eventContexts, messages = {}, {}, {}, {}
+	local arena = env.load("src/server/World.luau").build()
+	local fakeEvent = { Id = "test", Name = "TEST HAZARD", Description = "Test", Duration = 10,
+		Run = function(context) table.insert(eventContexts, context); return function() end end }
+	env.Env.script = { Parent = { Events = { choose = function() return fakeEvent end } } }
+	local data = {
+		get = function(player) return profiles[player] end,
+		push = function() end,
+		award = function(player, coins, points) local p = profiles[player]; if p then Economy.awardCoins(p, coins, Catalog); p.Points += points or 0 end end,
+		finishRound = function(player, won, survived) table.insert(outcomes, { Player = player, Won = won, Survived = survived }) end,
+		save = function() end,
+	}
+	local remote = { FireAllClients = function() end, FireClient = function(_, _, message) table.insert(messages, message) end }
+	local rounds = env.load("src/server/RoundService.luau").new({ World = arena, Data = data,
+		Remotes = { State = remote, Toast = remote, Countdown = remote }, RefreshCosmetics = function() end, PlaySound = function() end,
+		ArenaTeam = roblox.Instance.new("Team"), LobbyTeam = roblox.Instance.new("Team") })
+	local function character(player)
+		local model = roblox.Instance.new("Model"); model.Name = player.Name
+		local root = roblox.Instance.new("Part"); root.Name = "HumanoidRootPart"; root.CFrame = roblox.CFrame.new(arena.LobbySpawn); root.Position = arena.LobbySpawn; root.Parent = model
+		local humanoid = roblox.Instance.new("Humanoid"); humanoid.Health = 100; humanoid.MaxHealth = 100; humanoid.Parent = model
+		model.PrimaryPart = root; model.Parent = env.Workspace; player.Character = model
+		return model
+	end
+	local list = {}
+	local function add(index)
+		local player = roblox.Instance.new("Player"); player.Name = "Player" .. index; player.DisplayName = player.Name; player.UserId = index; player.Parent = players
+		profiles[player] = Profile.new(30); character(player); rounds:added(player); table.insert(list, player)
+		return player
+	end
+	for index = 1, count do add(index) end
+	return { Env = env, Round = rounds, World = arena, Players = list, Profiles = profiles, Outcomes = outcomes, Contexts = eventContexts, Messages = messages, Add = add, Character = character }
+end
+test("Lobby intermission boards a capped FIFO queue and leaves late arrivals safe", function()
+	local h = roundHarness(13)
+	h.Round:tick(); eq(h.Round.State.Phase, "Intermission")
+	h.Env.time(115); h.Round:tick(); eq(h.Round.State.Phase, "Round")
+	eq(h.Round.State.AliveCount, 12); eq(h.Round.State.LobbyCount, 1); eq(h.Round.State.QueuedCount, 1)
+	assert(h.Round:isAlive(h.Players[1])); assert(not h.Round:isAlive(h.Players[13]))
+	local late = h.Add(14); assert(not h.Round:isAlive(late)); eq(late:GetAttribute("Status"), "Queued")
+	assert(late.Character.PrimaryPart.Position.X > 150)
+end)
+test("Both fallen players are eliminated before a winner can be awarded", function()
+	local h = roundHarness(2); h.Round:start()
+	for _, player in ipairs(h.Players) do player.Character:PivotTo(roblox.CFrame.new(0, 0, 0)) end
+	h.Round:tick(); eq(h.Round.State.Phase, "Results")
+	for _, outcome in ipairs(h.Outcomes) do eq(outcome.Won, false); eq(outcome.Survived, false) end
+end)
+test("Resetting cannot substitute a fresh avatar for the original round life", function()
+	local h = roundHarness(3); h.Round:start()
+	local player = h.Players[1]
+	local old = player.Character; local replacement = h.Character(player)
+	assert(not h.Round:isAlive(player)); h.Round:character(player, replacement)
+	eq(h.Round.Alive[player], nil); eq(player:GetAttribute("Status"), "Eliminated")
+	assert(replacement.PrimaryPart.Position.X > 150)
+	old:Destroy()
+end)
+test("A last survivor earns exactly one win and every entrant returns to the lobby", function()
+	local h = roundHarness(2); h.Round:start()
+	h.Round:eliminate(h.Players[2], "Test elimination")
+	h.Round:tick(); eq(h.Round.State.Phase, "Results"); eq(#h.Outcomes, 2)
+	local winners = 0
+	for _, outcome in ipairs(h.Outcomes) do if outcome.Won then winners += 1; eq(outcome.Player, h.Players[1]) end end
+	eq(winners, 1)
+	for _, player in ipairs(h.Players) do eq(player:GetAttribute("Status"), "Queued"); eq(player:GetAttribute("InRound"), false) end
+end)
+test("Solo rounds end with survival rewards rather than a competitive win", function()
+	local h = roundHarness(1); h.Round:start(); h.Env.time(250); h.Round:tick()
+	eq(h.Round.State.Phase, "Results"); eq(h.Outcomes[1].Won, false); eq(h.Outcomes[1].Survived, true)
+end)
+test("Lobby presses, concurrent presses, and callbacks from expired events are rejected", function()
+	local h = roundHarness(2); h.Round:start(); h.Env.time(105)
+	local visitor = h.Add(3); assert(not h.Round:startEvent(visitor))
+	local player = h.Players[1]; player.Character:PivotTo(roblox.CFrame.new(h.World.Button.Position + roblox.Vector3.new(0, 4, 0)))
+	assert(h.Round:startEvent(player)); assert(not h.Round:startEvent(player)); eq(h.Profiles[player].Presses, 1)
+	local context = h.Contexts[1]; h.Round:clearEvent(false)
+	local coins = h.Profiles[player].Coins; local health = player.Character:FindFirstChildOfClass("Humanoid").Health
+	context.Damage(player, 100); context.Award(player, 999, 999); context.Eliminate(player, "Stale job"); context.SetRole(player, "Robber")
+	eq(h.Profiles[player].Coins, coins); eq(player.Character:FindFirstChildOfClass("Humanoid").Health, health); eq(player:GetAttribute("Role"), "Survivor"); assert(h.Round:isAlive(player))
+end)
+test("Leaving the round immediately removes moon forces and event instructions", function()
+	local h = roundHarness(3); h.Round:start(); local player = h.Players[1]
+	local attachment = roblox.Instance.new("Attachment"); attachment.Name = "EventMoonAttachment"; attachment.Parent = player.Character.PrimaryPart
+	local force = roblox.Instance.new("VectorForce"); force.Name = "EventMoonGravity"; force.Parent = player.Character.PrimaryPart
+	player:SetAttribute("EventHint", "Jump!"); player:SetAttribute("EventTimer", 200)
+	h.Round:toggleQueue(player)
+	eq(force.Parent, nil); eq(attachment.Parent, nil); eq(player:GetAttribute("EventHint"), nil); eq(player:GetAttribute("EventTimer"), nil)
+	assert(player.Character.PrimaryPart.Position.X > 150); eq(player:GetAttribute("Queued"), false)
+end)
+test("Overtime warns before damage and a player can dodge a storm strike", function()
+	local h = roundHarness(2); h.Round:start(); h.Env.time(250); h.Round:tick()
+	assert(h.Round.State.SuddenDeath); eq(h.Round.State.Phase, "Round")
+	for _, player in ipairs(h.Players) do eq(player.Character:FindFirstChildOfClass("Humanoid").Health, 100) end
+	local ring = h.Round.OvertimeEffects:FindFirstChild("StormWarning"); assert(ring)
+	for _, player in ipairs(h.Players) do player.Character:PivotTo(roblox.CFrame.new(ring.Position + roblox.Vector3.new(30, 4, 0))) end
+	h.Env.Delayed[#h.Env.Delayed]()
+	for _, player in ipairs(h.Players) do eq(player.Character:FindFirstChildOfClass("Humanoid").Health, 100) end
+	h.Env.time(310); h.Round:tick(); eq(h.Round.State.Phase, "Results")
+	for _, outcome in ipairs(h.Outcomes) do eq(outcome.Won, false); eq(outcome.Survived, false) end
 end)
 print("\n" .. passed .. " checks passed. Physics, input, and live DataStores require Studio / a published experience.")

@@ -11,8 +11,9 @@ function Cosmetics.apply(player, data)
 	folder.Name = "ButtonCosmetics"
 	folder.Parent = character
 	local title = Catalog.ById[data.Equipped.Title]
-	local king = (player:GetAttribute("KingUntil") or 0) > workspace:GetServerTimeNow()
-	if title or king then
+	local role = player:GetAttribute("Role")
+	local specialRole = role and role ~= "Lobby" and role ~= "Survivor" and role ~= "Spectator"
+	if title or specialRole then
 		local billboard = Instance.new("BillboardGui")
 		billboard.Adornee = head
 		billboard.Size = UDim2.fromOffset(240, 60)
@@ -23,28 +24,12 @@ function Cosmetics.apply(player, data)
 		local label = Instance.new("TextLabel")
 		label.Size = UDim2.fromScale(1, 1)
 		label.BackgroundTransparency = 1
-		label.Text = king and "♛ BUTTON KING ♛" or title.Name
+		label.Text = specialRole and string.upper(role) or title.Name
 		label.FontFace = Font.new("rbxasset://fonts/families/Montserrat.json", Enum.FontWeight.Bold)
 		label.TextSize = 16
 		label.TextStrokeTransparency = 0.45
-		label.TextColor3 = king and Color3.fromRGB(255, 199, 65) or Color3.fromRGB(78, 255, 191)
+		label.TextColor3 = role == "Cop" and Color3.fromRGB(68, 145, 255) or (specialRole and Color3.fromRGB(255, 117, 98) or Color3.fromRGB(34, 179, 153))
 		label.Parent = billboard
-	end
-	if king then
-		local crown = Instance.new("Part")
-		crown.Name = "Crown"
-		crown.Size = Vector3.new(2, 0.6, 2)
-		crown.Material = Enum.Material.Neon
-		crown.Color = Color3.fromRGB(255, 199, 65)
-		crown.CanCollide = false
-		crown.CanTouch = false
-		crown.Massless = true
-		crown.CFrame = head.CFrame * CFrame.new(0, 1, 0)
-		crown.Parent = folder
-		local weld = Instance.new("WeldConstraint")
-		weld.Part0 = head
-		weld.Part1 = crown
-		weld.Parent = crown
 	end
 	local item = Catalog.ById[data.Equipped.Trail]
 	if item then

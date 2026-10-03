@@ -7,9 +7,11 @@ local modules = {
 	Config = require("../src/shared/Config"), Catalog = require("../src/shared/Catalog"),
 	Profile = require("../src/shared/Profile"), Economy = require("../src/shared/Economy"),
 	Rules = require("../src/shared/Rules"),
+	RoundRules = require("../src/shared/RoundRules"),
 }
 local Environment = {}
 local registered = false
+local clocks = {}
 function Environment.new(dataModel)
 	local signals = {}
 	local function signal(instance, name)
@@ -28,7 +30,7 @@ function Environment.new(dataModel)
 		return signals[instance][name]
 	end
 	if not registered then
-	for class, names in pairs({ Instance = { "Destroying" }, BasePart = { "Touched" }, GuiButton = { "Activated" } }) do
+	for class, names in pairs({ Instance = { "Destroying" }, BasePart = { "Touched" }, GuiButton = { "Activated" }, Humanoid = { "Died" } }) do
 		for _, name in ipairs(names) do
 			roblox.implementProperty(class, name, function(instance) return signal(instance, name) end)
 		end
@@ -36,6 +38,7 @@ function Environment.new(dataModel)
 	end
 	local game = dataModel or roblox.Instance.new("DataModel")
 	local workspace = game:GetService("Workspace")
+	clocks[workspace] = 100
 	local playerGui = roblox.Instance.new("PlayerGui")
 	local services = {
 		Workspace = workspace, Lighting = game:GetService("Lighting"),
@@ -47,9 +50,26 @@ function Environment.new(dataModel)
 		end },
 	}
 	if not registered then
-	roblox.implementMethod("Workspace", "GetServerTimeNow", function() return 100 end)
+	roblox.implementMethod("Workspace", "GetServerTimeNow", function(instance) return clocks[instance] or 100 end)
+	roblox.implementMethod("Instance", "WaitForChild", function(instance, name) return instance:FindFirstChild(name) end)
+	roblox.implementMethod("Players", "GetPlayers", function(instance)
+		local players = {}
+		for _, child in ipairs(instance:GetChildren()) do if child:IsA("Player") then table.insert(players, child) end end
+		return players
+	end)
+	roblox.implementMethod("Humanoid", "TakeDamage", function(instance, amount)
+		instance.Health = math.max(0, instance.Health - amount)
+		if instance.Health <= 0 then instance.Died:Fire() end
+	end)
 	roblox.implementMethod("Model", "GetPivot", function(model)
 		return model.PrimaryPart and model.PrimaryPart.CFrame or roblox.CFrame.new()
+	end)
+	roblox.implementMethod("Model", "PivotTo", function(model, target)
+		local previous = model.PrimaryPart and model.PrimaryPart.CFrame or roblox.CFrame.new()
+		local transform = target * previous:Inverse()
+		for _, part in ipairs(model:GetDescendants()) do
+			if part:IsA("BasePart") then part.CFrame = transform * part.CFrame; part.Position = part.CFrame.Position end
+		end
 	end)
 	registered = true
 	end
@@ -66,16 +86,17 @@ function Environment.new(dataModel)
 		task = { spawn = function() end, wait = function() end, delay = function(_, fn) table.insert(delayed, fn) end },
 		TweenInfo = { new = function(...) return { ... } end },
 		Random = { new = function()
-			return { NextNumber = function(_, low, high) return (low + high) / 2 end, NextInteger = function(_, low) return low end }
+			return { NextNumber = function(_, low, high) return ((low or 0) + (high or 1)) / 2 end, NextInteger = function(_, low) return low end }
 		end },
 	}
-	for _, name in ipairs({ "Instance", "Vector2", "Vector3", "CFrame", "Color3", "UDim", "UDim2", "Enum", "NumberRange", "NumberSequence", "ColorSequence", "Font" }) do env[name] = roblox[name] end
+	for _, name in ipairs({ "Instance", "Vector2", "Vector3", "CFrame", "Color3", "UDim", "UDim2", "Enum", "NumberRange", "NumberSequence", "ColorSequence", "Font", "BrickColor", "PhysicalProperties" }) do env[name] = roblox[name] end
 	local result = { Game = game, Workspace = workspace, Services = services, Env = env, PlayerGui = playerGui, Delayed = delayed }
 	function result.load(path) return luau.load(fs.readFile(path), { environment = env, debugName = path })() end
 	function result.viewport(width, height)
 		viewport = roblox.Vector2.new(width, height)
 		camera.ViewportSize = viewport
 	end
+	function result.time(value) clocks[workspace] = value end
 	return result
 end
 return Environment
