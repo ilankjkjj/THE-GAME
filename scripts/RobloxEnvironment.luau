@@ -8,7 +8,9 @@ local modules = {
 	Profile = require("../src/shared/Profile"), Economy = require("../src/shared/Economy"),
 	Rules = require("../src/shared/Rules"),
 	RoundRules = require("../src/shared/RoundRules"),
+	DisasterDirector = require("../src/shared/DisasterDirector"), AudioCatalog = require("../src/shared/AudioCatalog"),
 }
+function modules:WaitForChild(name) return self[name] end
 local Environment = {}
 local registered = false
 local clocks = {}
@@ -20,7 +22,10 @@ function Environment.new(dataModel)
 			local event = { Callbacks = {} }
 			function event:Connect(callback)
 				table.insert(self.Callbacks, callback)
-				return { Disconnect = function() end }
+				return { Disconnect = function()
+					local index = table.find(self.Callbacks, callback)
+					if index then table.remove(self.Callbacks, index) end
+				end }
 			end
 			function event:Fire(...)
 				for _, callback in ipairs(self.Callbacks) do callback(...) end
@@ -30,7 +35,7 @@ function Environment.new(dataModel)
 		return signals[instance][name]
 	end
 	if not registered then
-	for class, names in pairs({ Instance = { "Destroying" }, BasePart = { "Touched" }, GuiButton = { "Activated" }, Humanoid = { "Died" } }) do
+	for class, names in pairs({ Instance = { "Destroying" }, BasePart = { "Touched" }, GuiButton = { "Activated" }, Tool = { "Activated" }, Humanoid = { "Died" } }) do
 		for _, name in ipairs(names) do
 			roblox.implementProperty(class, name, function(instance) return signal(instance, name) end)
 		end
@@ -45,6 +50,9 @@ function Environment.new(dataModel)
 		ReplicatedStorage = { Shared = modules, WaitForChild = function() return modules end },
 		Players = { LocalPlayer = { WaitForChild = function() return playerGui end }, GetPlayers = function() return {} end },
 		Debris = { AddItem = function() end },
+		UserInputService = { TouchEnabled = false },
+		SoundService = game:GetService("SoundService"),
+		RunService = { BindToRenderStep = function() end, UnbindFromRenderStep = function() end },
 		TweenService = { Create = function(_, object, _, targets)
 			return { Play = function() for property, value in pairs(targets) do object[property] = value end end }
 		end },
@@ -58,9 +66,13 @@ function Environment.new(dataModel)
 		return players
 	end)
 	roblox.implementMethod("Humanoid", "TakeDamage", function(instance, amount)
+		if instance.Parent and instance.Parent:FindFirstChildOfClass("ForceField") then return end
 		instance.Health = math.max(0, instance.Health - amount)
 		if instance.Health <= 0 then instance.Died:Fire() end
 	end)
+	roblox.implementMethod("ParticleEmitter", "Emit", function() end)
+	roblox.implementMethod("Sound", "Play", function() end)
+	roblox.implementMethod("Sound", "Stop", function() end)
 	roblox.implementMethod("Model", "GetPivot", function(model)
 		return model.PrimaryPart and model.PrimaryPart.CFrame or roblox.CFrame.new()
 	end)
@@ -89,7 +101,7 @@ function Environment.new(dataModel)
 			return { NextNumber = function(_, low, high) return ((low or 0) + (high or 1)) / 2 end, NextInteger = function(_, low) return low end }
 		end },
 	}
-	for _, name in ipairs({ "Instance", "Vector2", "Vector3", "CFrame", "Color3", "UDim", "UDim2", "Enum", "NumberRange", "NumberSequence", "ColorSequence", "Font", "BrickColor", "PhysicalProperties" }) do env[name] = roblox[name] end
+	for _, name in ipairs({ "Instance", "Vector2", "Vector3", "CFrame", "Color3", "UDim", "UDim2", "Enum", "NumberRange", "NumberSequence", "NumberSequenceKeypoint", "ColorSequence", "ColorSequenceKeypoint", "Font", "BrickColor", "PhysicalProperties", "RaycastParams" }) do env[name] = roblox[name] end
 	local result = { Game = game, Workspace = workspace, Services = services, Env = env, PlayerGui = playerGui, Delayed = delayed }
 	function result.load(path) return luau.load(fs.readFile(path), { environment = env, debugName = path })() end
 	function result.viewport(width, height)

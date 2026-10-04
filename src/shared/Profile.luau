@@ -1,46 +1,34 @@
 local Profile = {}
 local MAX_VALUE = 1e12
-local function number(value, default)
+local function number(value, default, maximum)
 	if type(value) ~= "number" or value ~= value or math.abs(value) == math.huge then
 		return default
 	end
-	return math.clamp(math.floor(value), 0, MAX_VALUE)
+	return math.clamp(math.floor(value), 0, maximum or MAX_VALUE)
 end
-function Profile.new(startingCoins)
-	return {
-		Version = 2, Coins = startingCoins, Points = 0, Presses = 0, Wins = 0, Rounds = 0,
-		Owned = { skin_classic = true }, Equipped = { Skin = "skin_classic" },
-	}
+function Profile.new(startingTokens)
+	return { Version = 3, Tokens = startingTokens, Presses = 0, Wins = 0, Rounds = 0, KOs = 0, Inventory = {} }
 end
-function Profile.normalize(raw, catalog, startingCoins)
-	local data = Profile.new(startingCoins)
+function Profile.normalize(raw, catalog, startingTokens)
+	local data = Profile.new(startingTokens)
 	if type(raw) ~= "table" then
 		return data
 	end
-	for _, key in ipairs({ "Coins", "Points", "Presses", "Wins", "Rounds" }) do
-		data[key] = number(raw[key], data[key])
+	for _, key in ipairs({ "Presses", "Wins", "Rounds", "KOs" }) do data[key] = number(raw[key], 0) end
+	if raw.Version == 3 then data.Tokens = number(raw.Tokens, startingTokens)
+	else
+		-- Preserve earned balances once while retiring cosmetic ownership and boosts.
+		data.Tokens = math.min(MAX_VALUE, number(raw.Coins, startingTokens) + number(raw.Points, 0))
 	end
-	if type(raw.Owned) == "table" then
-		for id, owned in pairs(raw.Owned) do
-			if owned == true and catalog.ById[id] then
-				data.Owned[id] = true
-			end
-		end
-	end
-	if type(raw.Equipped) == "table" then
-		for category, id in pairs(raw.Equipped) do
+	if raw.Version == 3 and type(raw.Inventory) == "table" then
+		for id, count in pairs(raw.Inventory) do
 			local item = catalog.ById[id]
-			if item and data.Owned[id] and item.Category == category then
-				data.Equipped[category] = id
-			end
+			if item then local stock = number(count, 0, item.MaxStock); if stock > 0 then data.Inventory[id] = stock end end
 		end
 	end
 	return data
 end
 function Profile.copy(data)
-	return {
-		Version = data.Version, Coins = data.Coins, Points = data.Points, Presses = data.Presses, Wins = data.Wins, Rounds = data.Rounds,
-		Owned = table.clone(data.Owned), Equipped = table.clone(data.Equipped),
-	}
+	return { Version = 3, Tokens = data.Tokens, Presses = data.Presses, Wins = data.Wins, Rounds = data.Rounds, KOs = data.KOs, Inventory = table.clone(data.Inventory) }
 end
 return Profile

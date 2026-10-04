@@ -1,18 +1,18 @@
 local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
 local Catalog = require(game:GetService("ReplicatedStorage").Shared.Catalog)
 local UI = {}
 local palette = {
-	Paper = Color3.fromRGB(255, 253, 248), White = Color3.fromRGB(255, 255, 255),
-	Ink = Color3.fromRGB(35, 49, 66), Muted = Color3.fromRGB(103, 119, 132),
-	Line = Color3.fromRGB(221, 231, 232), Coral = Color3.fromRGB(241, 86, 81),
-	CoralPale = Color3.fromRGB(255, 233, 226), CoralInk = Color3.fromRGB(180, 49, 43),
-	CoralButton = Color3.fromRGB(218, 58, 54), Teal = Color3.fromRGB(0, 128, 120),
-	TealPale = Color3.fromRGB(223, 247, 238), Gold = Color3.fromRGB(153, 96, 6),
-	GoldPale = Color3.fromRGB(255, 241, 195), Lilac = Color3.fromRGB(111, 85, 190),
-	LilacPale = Color3.fromRGB(239, 232, 255), Disabled = Color3.fromRGB(229, 235, 235),
+	Paper = Color3.fromRGB(224, 224, 224), White = Color3.fromRGB(245, 245, 245),
+	Ink = Color3.fromRGB(30, 30, 30), Muted = Color3.fromRGB(80, 80, 80),
+	Line = Color3.fromRGB(76, 76, 76), Coral = Color3.fromRGB(235, 65, 45),
+	CoralPale = Color3.fromRGB(255, 220, 211), CoralInk = Color3.fromRGB(158, 38, 24),
+	CoralButton = Color3.fromRGB(205, 43, 28), Teal = Color3.fromRGB(43, 118, 37),
+	TealPale = Color3.fromRGB(218, 240, 212), Gold = Color3.fromRGB(127, 82, 0),
+	GoldPale = Color3.fromRGB(255, 225, 111), Lilac = Color3.fromRGB(0, 84, 160),
+	LilacPale = Color3.fromRGB(210, 228, 245), Disabled = Color3.fromRGB(195, 195, 195),
 }
-local categoryIcons = { Skin = "●", Trail = "〰", Title = "Aa", Sound = "♪", Emote = "★", Pet = "◆", Multiplier = "×" }
-local categoryLabels = { Skin = "Buttons", Trail = "Trails", Title = "Titles", Sound = "Sounds", Emote = "Emotes", Pet = "Pets", Multiplier = "Boosts" }
+local supplyIcons = { medkit = "+", soda = ">>", spring = "↑", shield = "◇" }
 local function make(class, parent, props)
 	local object = Instance.new(class)
 	for key, value in pairs(props or {}) do object[key] = value end
@@ -20,32 +20,34 @@ local function make(class, parent, props)
 	return object
 end
 local function round(object, radius)
-	make("UICorner", object, { CornerRadius = UDim.new(0, radius or 16) })
+	make("UICorner", object, { CornerRadius = UDim.new(0, math.min(radius or 2, 2)) })
 	return object
 end
 local function card(parent, props, color)
 	props.BackgroundColor3 = color or palette.White
 	props.BorderSizePixel = 0
 	local frame = round(make("Frame", parent, props))
-	make("UIStroke", frame, { Color = palette.Line, Thickness = 1, Transparency = 0.15 })
+	make("UIStroke", frame, { Color = palette.Line, Thickness = 1, Transparency = 0 })
 	return frame
 end
 local function label(parent, value, size, position, dimensions, color, heavy)
 	return make("TextLabel", parent, {
 		BackgroundTransparency = 1, Text = value,
-		FontFace = Font.new("rbxasset://fonts/families/Montserrat.json", heavy and Enum.FontWeight.ExtraBold or Enum.FontWeight.Medium),
+		Font = heavy and Enum.Font.SourceSansBold or Enum.Font.SourceSans,
 		TextSize = size, TextColor3 = color or palette.Ink, Position = position, Size = dimensions,
 		TextXAlignment = Enum.TextXAlignment.Left, TextWrapped = true,
 		ZIndex = parent:IsA("GuiObject") and parent.ZIndex + 1 or 2,
 	})
 end
 local function button(parent, value, position, dimensions, color, ink)
-	return round(make("TextButton", parent, {
+	local object = round(make("TextButton", parent, {
 		Text = value, Position = position, Size = dimensions, BackgroundColor3 = color or palette.Paper,
-		TextColor3 = ink or palette.Ink, FontFace = Font.new("rbxasset://fonts/families/Montserrat.json", Enum.FontWeight.Bold),
+		TextColor3 = ink or palette.Ink, Font = Enum.Font.SourceSansBold,
 		TextSize = 13, BorderSizePixel = 0, AutoButtonColor = true, Selectable = true,
 		ZIndex = parent:IsA("GuiObject") and parent.ZIndex + 1 or 2,
-	}), 12)
+	}), 2)
+	make("UIStroke", object, { Color = palette.Line, Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border })
+	return object
 end
 local function formatNumber(value)
 	local result = tostring(math.floor(value or 0))
@@ -54,6 +56,17 @@ local function formatNumber(value)
 		result = replaced
 		if count == 0 then return result end
 	end
+end
+local function compactNumber(value)
+	value = math.max(0, value or 0)
+	if value >= 1000000 then return string.format("%.1fm", value / 1000000) end
+	if value >= 10000 then return string.format("%.1fk", value / 1000) end
+	return formatNumber(value)
+end
+local function sameText(a, b)
+	if type(a) ~= "string" or type(b) ~= "string" then return false end
+	local function normalized(value) return string.lower(value):gsub("%s+", " "):match("^%s*(.-)%s*$") end
+	return normalized(a) == normalized(b)
 end
 local function attr(name)
 	local player = Players.LocalPlayer
@@ -69,93 +82,97 @@ local function statusColor(status)
 	if status == "Eliminated" then return palette.Coral, palette.CoralPale end
 	return palette.Muted, palette.Disabled
 end
+local function initialOf(name)
+	name = name ~= "" and name or "?"
+	local nextCharacter = utf8.offset(name, 2)
+	return string.upper(string.sub(name, 1, nextCharacter and nextCharacter - 1 or #name))
+end
 function UI.new(callbacks)
-	local self = setmetatable({ Callbacks = callbacks, Category = "Skin", Entries = {}, Tab = "Shop", CategoryTabs = {}, CanPress = false }, { __index = UI })
-	local gui = make("ScreenGui", Players.LocalPlayer:WaitForChild("PlayerGui"), {
+	local self = setmetatable({ Callbacks = callbacks, Entries = {}, Tab = "Shop", CanPress = false }, { __index = UI })
+	local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
+	local previous = playerGui:FindFirstChild("ButtonHUD")
+	if previous then previous:Destroy() end
+	local gui = make("ScreenGui", playerGui, {
 		Name = "ButtonHUD", ResetOnSpawn = false, ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 10,
 	})
 	self.Gui = gui
-	self.Brand = make("Frame", gui, { Position = UDim2.fromOffset(20, 14), Size = UDim2.fromOffset(255, 54), BackgroundTransparency = 1 })
-	local logo = card(self.Brand, { Size = UDim2.fromOffset(46, 46) }, palette.Coral)
-	local logoText = label(logo, "!", 30, UDim2.fromOffset(0, 0), UDim2.fromScale(1, 1), palette.White, true)
-	logoText.TextXAlignment = Enum.TextXAlignment.Center
-	label(self.Brand, "DON'T PRESS", 18, UDim2.fromOffset(56, 0), UDim2.fromOffset(200, 23), palette.Ink, true)
-	label(self.Brand, "THE BUTTON", 18, UDim2.fromOffset(56, 23), UDim2.fromOffset(200, 23), palette.Coral, true)
-	self.Stats = card(gui, { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -18, 0, 14), Size = UDim2.fromOffset(282, 62) }, palette.Paper)
-	self.Coins = label(self.Stats, "0 COINS", 16, UDim2.fromOffset(14, 6), UDim2.fromOffset(116, 25), palette.Gold, true)
-	self.Points = label(self.Stats, "0 POINTS", 16, UDim2.fromOffset(142, 6), UDim2.fromOffset(128, 25), palette.Teal, true)
-	self.Presses = label(self.Stats, "0 wins  ·  0 presses", 11, UDim2.fromOffset(14, 34), UDim2.new(1, -28, 0, 18), palette.Muted)
-	self.Round = card(gui, { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 14), Size = UDim2.fromOffset(340, 62) }, palette.Paper)
-	self.PhaseLabel = label(self.Round, "WELCOME TO THE LOBBY", 11, UDim2.fromOffset(14, 7), UDim2.new(1, -96, 0, 18), palette.Teal, true)
-	self.RoundInfo = label(self.Round, "Join the next round", 14, UDim2.fromOffset(14, 29), UDim2.new(1, -96, 0, 23), palette.Ink, true)
-	self.Timer = label(self.Round, "--:--", 24, UDim2.new(1, -83, 0, 10), UDim2.fromOffset(72, 39), palette.Ink, true)
+	self.Stats = card(gui, { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -14, 0, 78), Size = UDim2.fromOffset(180, 31) }, palette.Paper)
+	self.Tokens = label(self.Stats, "0 Tokens", 14, UDim2.fromOffset(10, 3), UDim2.new(1, -20, 0, 24), palette.Gold, true)
+	self.Round = card(gui, { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -14, 0, 12), Size = UDim2.fromOffset(180, 60) }, palette.Paper)
+	self.PhaseLabel = label(self.Round, "LOBBY", 9, UDim2.fromOffset(10, 6), UDim2.new(1, -76, 0, 16), palette.Teal, true)
+	self.RoundInfo = label(self.Round, "Join the next round", 11, UDim2.fromOffset(10, 26), UDim2.new(1, -20, 0, 25), palette.Ink, true)
+	self.Timer = label(self.Round, "--:--", 21, UDim2.new(1, -69, 0, 3), UDim2.fromOffset(59, 25), palette.Ink, true)
 	self.Timer.TextXAlignment = Enum.TextXAlignment.Right
-	self.Event = card(gui, { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 88), Size = UDim2.fromOffset(500, 66), BackgroundTransparency = 0.04 }, palette.Paper)
-	self.EventMark = round(make("Frame", self.Event, { Position = UDim2.fromOffset(11, 11), Size = UDim2.fromOffset(5, 44), BackgroundColor3 = palette.Coral, BorderSizePixel = 0 }), 3)
-	self.EventTitle = label(self.Event, "ONE BUTTON. EVERYONE FOR THEMSELVES.", 15, UDim2.fromOffset(28, 8), UDim2.new(1, -42, 0, 24), palette.Ink, true)
-	self.EventDescription = label(self.Event, "Press for chaos. Stay alive to win.", 12, UDim2.fromOffset(28, 33), UDim2.new(1, -42, 0, 25), palette.Muted)
-	self.Navigation = make("Frame", gui, { AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 18, 1, -20), Size = UDim2.fromOffset(288, 48), BackgroundTransparency = 1 })
+	self.Event = card(gui, { Position = UDim2.fromOffset(14, 12), Size = UDim2.fromOffset(340, 96), BackgroundTransparency = 0.04 }, palette.Paper)
+	self.EventMark = round(make("Frame", self.Event, { Position = UDim2.fromOffset(9, 10), Size = UDim2.new(0, 4, 1, -20), BackgroundColor3 = palette.Coral, BorderSizePixel = 0 }), 3)
+	self.EventTitle = label(self.Event, "DON'T PRESS THE BUTTON", 13, UDim2.fromOffset(21, 8), UDim2.new(1, -32, 0, 21), palette.Ink, true)
+	self.EventDescription = label(self.Event, "Join the queue. Outlast the chaos.", 11, UDim2.fromOffset(21, 32), UDim2.new(1, -34, 0, 40), palette.Muted)
+	self.EventDescription.TextYAlignment = Enum.TextYAlignment.Top
+	self.Hint = label(self.Event, "", 10, UDim2.fromOffset(21, 75), UDim2.new(1, -34, 0, 16), palette.Teal, true)
+	self.Hint.Visible = false
+	self.Navigation = make("Frame", gui, { AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 14, 1, -14), Size = UDim2.fromOffset(252, 35), BackgroundTransparency = 1 })
 	self.NavButtons = {}
-	for index, specification in ipairs({ { "SHOP", "Shop", palette.TealPale, palette.Teal }, { "RANKS", "Leaderboard", palette.GoldPale, palette.Gold }, { "PLAYERS", "Roster", palette.LilacPale, palette.Lilac }, { "EMOTE", "Emote", palette.CoralPale, palette.CoralInk } }) do
-		local nav = button(self.Navigation, specification[1], UDim2.fromOffset((index - 1) * 74, 0), UDim2.fromOffset(68, 44), specification[3], specification[4])
+	for index, specification in ipairs({ { "SHOP", "Shop", palette.TealPale, palette.Teal }, { "WINS", "Leaderboard", palette.GoldPale, palette.Gold }, { "PLAYERS", "Roster", palette.LilacPale, palette.Lilac } }) do
+		local nav = button(self.Navigation, specification[1], UDim2.fromOffset((index - 1) * 55, 0), UDim2.fromOffset(51, 35), specification[3], specification[4])
 		nav.Activated:Connect(function()
-			if specification[2] == "Emote" then if callbacks.Emote then callbacks.Emote() end
-			elseif self.Panel.Visible and self.Tab == specification[2] then self:close()
+			if self.Panel.Visible and self.Tab == specification[2] then self:close()
 			else self:open(specification[2]) end
 		end)
 		table.insert(self.NavButtons, nav)
 	end
-	self.Actions = make("Frame", gui, { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -20), Size = UDim2.fromOffset(360, 58), BackgroundTransparency = 1 })
-	self.Press = button(self.Actions, "PRESS FOR CHAOS", UDim2.fromScale(0, 0), UDim2.fromScale(1, 1), palette.CoralButton, palette.White)
-	self.Press.TextSize = 20
-	self.Press.Activated:Connect(function() if self.CanPress and not self.Panel.Visible then callbacks.Press() end end)
-	self.Queue = button(self.Actions, "JOIN NEXT ROUND", UDim2.fromScale(0, 0), UDim2.new(0.65, -4, 1, 0), palette.Teal, palette.White)
-	self.Queue.TextSize = 15
-	self.Queue.Activated:Connect(function() if callbacks.Queue then callbacks.Queue() end end)
-	self.Spectate = button(self.Actions, "WATCH", UDim2.new(0.65, 4, 0, 0), UDim2.new(0.35, -4, 1, 0), palette.LilacPale, palette.Lilac)
-	self.Spectate.Visible = false
+	self.Sound = button(self.Navigation, "♪", UDim2.fromOffset(165, 0), UDim2.fromOffset(32, 35), palette.Paper, palette.Teal)
+	self.Sound.TextSize = 18
+	self.Sound.Activated:Connect(function()
+		if callbacks.Mute then self.Muted = callbacks.Mute() else self.Muted = not self.Muted end
+		self.Sound.Text = self.Muted and "×♪" or "♪"
+		self.Sound.TextColor3 = self.Muted and palette.Muted or palette.Teal
+	end)
+	self.Actions = make("Frame", gui, { AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -14, 1, -14), Size = UDim2.fromOffset(235, 42), BackgroundTransparency = 1 })
+	self.Press = button(self.Actions, "PRESS  [E]", UDim2.fromScale(0, 0), UDim2.fromScale(1, 1), palette.CoralButton, palette.White)
+	self.Press.TextSize = 14
 	self.Press.Visible = false
+	self.Press.Activated:Connect(function() if self.CanPress and not self.Panel.Visible then callbacks.Press() end end)
+	self.Queue = button(self.Actions, "JOIN NEXT ROUND", UDim2.fromScale(0, 0), UDim2.new(0.65, -3, 1, 0), palette.Teal, palette.White)
+	self.Queue.TextSize = 12
+	self.Queue.Activated:Connect(function() if callbacks.Queue then callbacks.Queue() end end)
+	self.Spectate = button(self.Actions, "WATCH", UDim2.new(0.65, 3, 0, 0), UDim2.new(0.35, -3, 1, 0), palette.LilacPale, palette.Lilac)
+	self.Spectate.Visible = false
+	self.Spectate.TextSize = 11
 	self.Spectate.Activated:Connect(function() if callbacks.Spectate then callbacks.Spectate() end end)
-	self.Hint = label(gui, "Press for chaos. Last survivor wins.", 12, UDim2.new(0.5, 0, 1, -85), UDim2.fromOffset(440, 23), palette.Ink, true)
-	self.Hint.AnchorPoint = Vector2.new(0.5, 1)
-	self.Hint.TextXAlignment = Enum.TextXAlignment.Center
-	self.Hint.BackgroundColor3 = palette.Paper
-	self.Hint.BackgroundTransparency = 0.08
-	self.Hint.BorderSizePixel = 0
-	round(self.Hint, 12)
-	self.Health = card(gui, { AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -18, 1, -20), Size = UDim2.fromOffset(180, 48), Visible = false }, palette.Paper)
-	self.HealthLabel = label(self.Health, "HEALTH 100", 11, UDim2.fromOffset(12, 5), UDim2.new(1, -24, 0, 18), palette.Teal, true)
-	local healthTrack = round(make("Frame", self.Health, { Position = UDim2.fromOffset(12, 28), Size = UDim2.new(1, -24, 0, 7), BackgroundColor3 = palette.Disabled, BorderSizePixel = 0 }), 4)
+	self.Spectator = card(gui, { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -14, 0, 113), Size = UDim2.fromOffset(180, 67), Visible = false }, palette.Paper)
+	self.Watching = label(self.Spectator, "", 13, UDim2.fromOffset(8, 4), UDim2.new(1, -16, 0, 25), palette.Ink, true)
+	self.Watching.TextTruncate = Enum.TextTruncate.AtEnd
+	self.Watching.TextWrapped = false
+	self.WatchPrevious = button(self.Spectator, "<", UDim2.new(0, 8, 0, 32), UDim2.new(0.25, -8, 0, 28), palette.LilacPale, palette.Lilac)
+	self.WatchStop = button(self.Spectator, "STOP", UDim2.new(0.25, 4, 0, 32), UDim2.new(0.5, -8, 0, 28), palette.White, palette.Ink)
+	self.WatchNext = button(self.Spectator, ">", UDim2.new(0.75, 4, 0, 32), UDim2.new(0.25, -12, 0, 28), palette.LilacPale, palette.Lilac)
+	self.WatchPrevious.Activated:Connect(function() if callbacks.SpectatePrevious then callbacks.SpectatePrevious() end end)
+	self.WatchNext.Activated:Connect(function() if callbacks.SpectateNext then callbacks.SpectateNext() end end)
+	self.WatchStop.Activated:Connect(function() if callbacks.SpectateStop then callbacks.SpectateStop() end end)
+	self.Health = card(gui, { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -14, 0, 115), Size = UDim2.fromOffset(180, 26), Visible = false }, palette.Paper)
+	self.HealthLabel = label(self.Health, "HP 100", 9, UDim2.fromOffset(10, 2), UDim2.fromOffset(54, 20), palette.Teal, true)
+	local healthTrack = round(make("Frame", self.Health, { Position = UDim2.fromOffset(67, 9), Size = UDim2.new(1, -77, 0, 7), BackgroundColor3 = palette.Disabled, BorderSizePixel = 0 }), 4)
 	self.HealthFill = round(make("Frame", healthTrack, { Size = UDim2.fromScale(1, 1), BackgroundColor3 = palette.Teal, BorderSizePixel = 0 }), 4)
-	self.Toast = card(gui, { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -122), Size = UDim2.fromOffset(470, 46), Visible = false, ZIndex = 12 }, palette.Paper)
-	self.ToastText = label(self.Toast, "", 13, UDim2.fromOffset(16, 6), UDim2.new(1, -32, 1, -12), palette.Ink, true)
-	self.ToastText.TextXAlignment = Enum.TextXAlignment.Center
-	self.Countdown = label(gui, "", 82, UDim2.fromScale(0.5, 0.45), UDim2.fromOffset(300, 110), palette.Coral, true)
-	self.Countdown.AnchorPoint = Vector2.new(0.5, 0.5)
-	self.Countdown.TextXAlignment = Enum.TextXAlignment.Center
-	self.Countdown.TextStrokeColor3 = palette.White
-	self.Countdown.TextStrokeTransparency = 0.25
+	self.Toast = card(gui, { Position = UDim2.fromOffset(14, 119), Size = UDim2.fromOffset(340, 40), Visible = false, ZIndex = 12 }, palette.Paper)
+	self.ToastText = label(self.Toast, "", 11, UDim2.fromOffset(13, 5), UDim2.new(1, -26, 1, -10), palette.Ink, true)
+	self.Countdown = label(self.Event, "", 13, UDim2.new(1, -66, 0, 7), UDim2.fromOffset(55, 22), palette.CoralInk, true)
+	self.Countdown.TextXAlignment = Enum.TextXAlignment.Right
 	self.Countdown.Visible = false
 	self.Countdown.ZIndex = 14
+
 	self.Overlay = make("TextButton", gui, { Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.fromRGB(35, 66, 73), BackgroundTransparency = 0.45, Text = "", AutoButtonColor = false, Visible = false, ZIndex = 20 })
 	self.Overlay.Activated:Connect(function() self:close() end)
 	self.Panel = card(gui, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(710, 530), Visible = false, ZIndex = 21 }, palette.Paper)
-	self.PanelTitle = label(self.Panel, "MAKE SOME TROUBLE", 25, UDim2.fromOffset(22, 16), UDim2.new(1, -86, 0, 33), palette.Ink, true)
+	self.PanelTitle = label(self.Panel, "SUPPLY SHOP", 25, UDim2.fromOffset(22, 16), UDim2.new(1, -86, 0, 33), palette.Ink, true)
 	self.Close = button(self.Panel, "×", UDim2.new(1, -55, 0, 14), UDim2.fromOffset(37, 37), palette.CoralPale, palette.Coral)
 	self.Close.TextSize = 24
 	self.Close.Activated:Connect(function() self:close() end)
-	self.PanelSubtitle = label(self.Panel, "Give your button a little personality.", 13, UDim2.fromOffset(22, 54), UDim2.new(1, -44, 0, 28), palette.Muted)
-	self.Tabs = make("ScrollingFrame", self.Panel, { Position = UDim2.fromOffset(22, 94), Size = UDim2.new(1, -44, 0, 42), BackgroundTransparency = 1, BorderSizePixel = 0, CanvasSize = UDim2.fromOffset(755, 0), ScrollingDirection = Enum.ScrollingDirection.X, ScrollBarThickness = 2, ScrollBarImageColor3 = palette.Teal, ZIndex = 22 })
-	for index, category in ipairs(Catalog.Categories) do
-		local tab = button(self.Tabs, categoryLabels[category] or category, UDim2.fromOffset((index - 1) * 108, 0), UDim2.fromOffset(100, 36), palette.White, palette.Muted)
-		tab.Activated:Connect(function() self.Category = category; self:renderShop() end)
-		self.CategoryTabs[category] = tab
-	end
-	self.Balance = label(self.Panel, "YOUR POINTS: 0", 12, UDim2.fromOffset(22, 147), UDim2.new(1, -165, 0, 27), palette.Teal, true)
-	self.Clear = button(self.Panel, "UNEQUIP", UDim2.new(1, -133, 0, 146), UDim2.fromOffset(111, 28), palette.Disabled, palette.Muted)
-	self.Clear.TextSize = 10
-	self.Clear.Activated:Connect(function() callbacks.Shop("Unequip", self.Category) end)
-	self.List = make("ScrollingFrame", self.Panel, { Position = UDim2.fromOffset(22, 186), Size = UDim2.new(1, -44, 1, -206), BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 4, ScrollBarImageColor3 = palette.Teal, CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y, ZIndex = 22 })
+	self.PanelSubtitle = label(self.Panel, "Buy supplies. Use them from your backpack during the next round.", 14, UDim2.fromOffset(22, 54), UDim2.new(1, -44, 0, 32), palette.Muted)
+	self.Balance = label(self.Panel, "YOUR TOKENS: 0", 14, UDim2.fromOffset(22, 92), UDim2.new(1, -44, 0, 24), palette.Gold, true)
+	self.ReturnLobby = button(self.Panel, "RETURN TO LOBBY", UDim2.new(0, 22, 1, -60), UDim2.new(1, -44, 0, 38), palette.Lilac, palette.White)
+	self.ReturnLobby.Visible = false
+	self.ReturnLobby.Activated:Connect(function() self:close() end)
+	self.List = make("ScrollingFrame", self.Panel, { Position = UDim2.fromOffset(22, 126), Size = UDim2.new(1, -44, 1, -146), BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 5, ScrollBarImageColor3 = palette.Line, CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y, ZIndex = 22 })
 	make("UIListLayout", self.List, { Padding = UDim.new(0, 10), SortOrder = Enum.SortOrder.LayoutOrder })
 	make("UIPadding", self.List, { PaddingTop = UDim.new(0, 2), PaddingLeft = UDim.new(0, 2), PaddingRight = UDim.new(0, 2), PaddingBottom = UDim.new(0, 4) })
 	self:resize()
@@ -167,162 +184,184 @@ function UI:resize()
 	local size = camera.ViewportSize
 	local phone = size.X < 640
 	local short = size.Y < 520
-	self.Phone, self.Short = phone, short
-	self.Brand.Visible = size.X >= 1140 and not short
-	local statsWidth = phone and math.min(360, size.X - 24) or (short and 250 or 282)
-	self.Stats.Size = UDim2.fromOffset(statsWidth, phone and 40 or (short and 46 or 62))
-	self.Stats.AnchorPoint = phone and Vector2.new(0.5, 0) or Vector2.new(1, 0)
-	self.Stats.Position = phone and UDim2.new(0.5, 0, 0, 8) or UDim2.new(1, -14, 0, 12)
-	self.Coins.Position = UDim2.fromOffset(12, 6)
-	self.Coins.Size = UDim2.new(0.46, -12, 0, 26)
-	self.Points.Position = UDim2.new(0.49, 0, 0, 6)
-	self.Points.Size = UDim2.new(0.51, -12, 0, 26)
-	self.Coins.TextSize, self.Points.TextSize = phone and 15 or 16, phone and 15 or 16
-	self.Presses.Visible = not (phone or short)
-	self.Round.Size = UDim2.fromOffset(phone and math.min(360, size.X - 24) or 340, phone and 50 or (short and 46 or 62))
-	self.Round.AnchorPoint = phone and Vector2.new(0.5, 0) or ((size.X < 1140 or short) and Vector2.new(0, 0) or Vector2.new(0.5, 0))
-	self.Round.Position = phone and UDim2.new(0.5, 0, 0, 57) or ((size.X < 1140 or short) and UDim2.fromOffset(14, 12) or UDim2.new(0.5, 0, 0, 14))
-	self.PhaseLabel.Position = UDim2.fromOffset(14, short and 3 or 5)
-	self.RoundInfo.Position = UDim2.fromOffset(14, short and 20 or (phone and 23 or 29))
-	self.RoundInfo.TextSize = phone and 12 or (short and 12 or 14)
-	self.Timer.Position = UDim2.new(1, -83, 0, short and 3 or 7)
-	self.Timer.TextSize = phone and 23 or (short and 21 or 24)
-	self.Event.Size = UDim2.fromOffset(math.min(short and 440 or 500, size.X - 24), short and 46 or 66)
-	self.Event.Position = UDim2.new(0.5, 0, 0, phone and 117 or (short and 70 or 88))
-	self.EventMark.Size = UDim2.fromOffset(5, short and 24 or 44)
-	self.EventTitle.Position = UDim2.fromOffset(28, short and 5 or 8)
-	self.EventTitle.Size = UDim2.new(1, -42, 0, short and 35 or 24)
-	self.EventTitle.TextSize = phone and 13 or (short and 13 or 15)
-	self.EventDescription.Visible = not short
-	self.Navigation.AnchorPoint = phone and Vector2.new(0.5, 1) or Vector2.new(0, 1)
-	self.Navigation.Position = phone and UDim2.new(0.5, 0, 1, -25) or UDim2.new(0, 12, 1, -16)
-	local verticalNav = short and not phone and size.X < 780
-	local navWidth = short and 240 or (phone and math.min(292, size.X - 36) or 288)
-	self.Navigation.Size = verticalNav and UDim2.fromOffset(64, 170) or UDim2.fromOffset(navWidth, 44)
-	if verticalNav then
-		self.Navigation.AnchorPoint = Vector2.new(0, 0)
-		self.Navigation.Position = UDim2.fromOffset(12, 126)
+	local touch = UserInputService.TouchEnabled == true
+	self.Phone, self.Short, self.Touch = phone, short, touch
+	local edge = phone and 10 or 14
+	local rightWidth = phone and 116 or (size.X < 800 and 152 or 180)
+	local eventWidth = math.min(340, size.X - rightWidth - edge * 3)
+	local eventHeight = phone and 112 or 96
+	self.Event.Position = UDim2.fromOffset(edge, 10)
+	self.Event.Size = UDim2.fromOffset(eventWidth, eventHeight)
+	self.EventTitle.TextSize = phone and 12 or 15
+	self.EventTitle.TextTruncate = Enum.TextTruncate.AtEnd
+	self.EventTitle.Size = UDim2.new(1, self.Countdown.Visible and -87 or -32, 0, 21)
+	self.EventDescription.Position = UDim2.fromOffset(21, 32)
+	self.EventDescription.Size = UDim2.new(1, -34, 0, phone and 57 or 50)
+	self.EventDescription.TextSize = phone and 11 or 13
+	self.Hint.Position = UDim2.new(0, 21, 1, -21)
+	self.Hint.Size = UDim2.new(1, -34, 0, 17)
+	self.Hint.TextSize = phone and 9 or 10
+	self.Hint.TextTruncate = Enum.TextTruncate.AtEnd
+	self.Round.Position = UDim2.new(1, -edge, 0, 10)
+	self.Round.Size = UDim2.fromOffset(rightWidth, 60)
+	self.PhaseLabel.Position = UDim2.fromOffset(10, 5)
+	self.PhaseLabel.Size = UDim2.new(1, -20, 0, 14)
+	self.PhaseLabel.TextSize = phone and 8 or 9
+	self.RoundInfo.Position = UDim2.fromOffset(10, 37)
+	self.RoundInfo.Size = UDim2.new(1, -20, 0, 19)
+	self.RoundInfo.TextSize = phone and 9 or 11
+	self.Timer.Position = UDim2.fromOffset(10, 17)
+	self.Timer.Size = UDim2.new(1, -20, 0, 23)
+	self.Timer.TextXAlignment = Enum.TextXAlignment.Left
+	self.Timer.TextSize = phone and 19 or 21
+	self.Stats.Position = UDim2.new(1, -edge, 0, 76)
+	self.Stats.Size = UDim2.fromOffset(rightWidth, 31)
+	self.Tokens.TextSize = phone and 13 or 14
+	self.Health.Position = UDim2.new(1, -edge, 0, 113)
+	self.Health.Size = UDim2.fromOffset(rightWidth, 26)
+	self.Spectator.Position = UDim2.new(1, -edge, 0, 113)
+	self.Spectator.Size = UDim2.fromOffset(rightWidth, touch and 82 or 67)
+	self.Watching.TextSize = phone and 12 or 13
+	self.Watching.Text = self.SpectatingName and (phone and self.SpectatingName or ("WATCHING " .. self.SpectatingName)) or ""
+	for _, control in ipairs({ self.WatchPrevious, self.WatchStop, self.WatchNext }) do
+		control.Size = UDim2.new(control.Size.X.Scale, control.Size.X.Offset, 0, touch and 42 or 28)
 	end
+	local safeBottom = touch and (short and 170 or 178) or 14
+	local actionWidth = phone and math.min(236, size.X - edge * 2) or 235
+	self.Actions.AnchorPoint = Vector2.new(1, 1)
+	self.Actions.Position = UDim2.new(1, -edge, 1, -safeBottom)
+	self.Actions.Size = UDim2.fromOffset(actionWidth, 42)
+	self.Press.TextSize = phone and 12 or 14
+	self.Queue.TextSize = phone and 11 or 12
+	self.Spectate.TextSize = phone and 10 or 11
+	self.Navigation.AnchorPoint = Vector2.new(0, 1)
+	self.Navigation.Position = UDim2.new(0, edge, 1, -(phone and safeBottom + 52 or safeBottom))
+	self.Navigation.Size = UDim2.fromOffset(touch and 209 or 197, touch and 42 or 35)
 	for index, nav in ipairs(self.NavButtons) do
-		nav.Position = verticalNav and UDim2.new(0, 0, (index - 1) / 4, 0) or UDim2.new((index - 1) / 4, 0, 0, 0)
-		nav.Size = verticalNav and UDim2.new(1, 0, 0.25, -6) or UDim2.new(0.25, -6, 1, 0)
-		nav.TextSize = short and 10 or 11
+		nav.Position = UDim2.fromOffset((index - 1) * 55, 0)
+		nav.Size = UDim2.fromOffset(51, touch and 42 or 35)
+		nav.TextSize = phone and 12 or 13
 	end
-	self.Actions.Size = UDim2.fromOffset(short and 272 or math.min(360, size.X - 36), short and 48 or (phone and 52 or 58))
-	self.Actions.Position = UDim2.new(0.5, 0, 1, phone and -100 or -16)
-	self.Press.TextSize = phone and 17 or (short and 16 or 20)
-	self.Queue.TextSize = phone and 13 or (short and 12 or 15)
-	self.Spectate.TextSize = short and 11 or 12
-	self.Hint.Size = UDim2.fromOffset(math.min(440, size.X - 32), 23)
-	self.Hint.Position = UDim2.new(0.5, 0, 1, phone and -159 or (short and -69 or -81))
-	self.Hint.TextSize = short and 10 or 11
-	self.Health.AnchorPoint = phone and Vector2.new(0.5, 1) or Vector2.new(1, 1)
-	self.Health.Position = phone and UDim2.new(0.5, 0, 1, -185) or UDim2.new(1, -12, 1, -16)
-	self.Health.Size = UDim2.fromOffset(short and 138 or 180, short and 42 or 48)
-	self.Toast.Position = UDim2.new(0.5, 0, 1, phone and -242 or (short and -102 or -118))
-	self.Toast.Size = UDim2.fromOffset(math.min(470, size.X - 28), 46)
+	self.Sound.Size = UDim2.fromOffset(touch and 44 or 32, touch and 42 or 35)
+	self.Toast.Position = UDim2.fromOffset(edge, eventHeight + 17)
+	self.Toast.Size = UDim2.fromOffset(eventWidth, 45)
+	self.ToastText.TextSize = phone and 10 or 11
 	self.Panel.Size = UDim2.fromOffset(math.min(710, size.X - 24), math.min(530, size.Y - 24))
 	self.PanelTitle.TextSize = phone and 19 or (short and 20 or 25)
 	if self.Panel.Visible then
 		if self.Tab == "Shop" then self:renderShop()
 		elseif self.Tab == "Roster" then self:renderRoster()
+		elseif self.Tab == "Results" then self:renderResults()
 		else self:renderLeaders() end
 	end
+	if self.State then self:tick(self.Nearby) end
 end
+
 function UI:open(tab)
 	self.Tab = tab
 	self.Panel.Visible, self.Overlay.Visible = true, true
-	self.Actions.Visible, self.Hint.Visible, self.Health.Visible = false, false, false
+	self.Actions.Visible, self.Event.Visible, self.Health.Visible, self.Spectator.Visible = false, false, false, false
 	if tab == "Shop" then self:renderShop()
 	elseif tab == "Roster" then self:renderRoster()
+	elseif tab == "Results" then self:renderResults()
 	else self:renderLeaders() end
 end
 function UI:close()
+	if self.Tab == "Results" and self.State then self.DismissedResultsRound = self.State.RoundNumber end
 	self.Panel.Visible, self.Overlay.Visible = false, false
-	self.Actions.Visible, self.Hint.Visible = true, true
+	self.Event.Visible = true
 	self:tick(self.Nearby)
+end
+function UI:destroy()
+	self.ToastToken = (self.ToastToken or 0) + 1
+	self.Gui:Destroy()
 end
 function UI:clearList()
 	for _, child in ipairs(self.List:GetChildren()) do if child:IsA("Frame") then child:Destroy() end end
 end
 function UI:listLayout(shop)
-	local compact = self.Short
-	self.Tabs.Visible, self.Balance.Visible = shop, shop
-	self.Clear.Visible = shop and self.Category ~= "Multiplier"
-	if compact then
-		self.PanelSubtitle.Visible = not shop
-		self.Tabs.Position = UDim2.fromOffset(22, 59)
-		self.Balance.Position = UDim2.fromOffset(22, 104)
-		self.Clear.Position = UDim2.new(1, -133, 0, 103)
-		self.List.Position = UDim2.fromOffset(22, shop and 141 or 92)
-		self.List.Size = UDim2.new(1, -44, 1, shop and -158 or -112)
-	else
-		self.PanelSubtitle.Visible = true
-		self.Tabs.Position = UDim2.fromOffset(22, 94)
-		self.Balance.Position = UDim2.fromOffset(22, 147)
-		self.Clear.Position = UDim2.new(1, -133, 0, 146)
-		self.List.Position = UDim2.fromOffset(22, shop and 186 or 99)
-		self.List.Size = UDim2.new(1, -44, 1, shop and -206 or -119)
-	end
+	self.Balance.Visible = shop
+	self.ReturnLobby.Visible = self.Tab == "Results"
+	self.PanelSubtitle.Visible = true
+	local top = shop and 126 or 99
+	local bottom = self.Tab == "Results" and 75 or 20
+	self.List.Position = UDim2.fromOffset(22, top)
+	self.List.Size = UDim2.new(1, -44, 1, -top - bottom)
 end
 function UI:renderShop()
-	self.PanelTitle.Text = "MAKE SOME TROUBLE"
-	self.PanelSubtitle.Text = "Your style. Your chaos. Spend Button Points to make it yours."
+	self.PanelTitle.Text = "SUPPLY SHOP"
+	self.PanelSubtitle.Text = "Buy in the lobby. Use supplies from your backpack in a round. Unused stock stays."
 	self:listLayout(true)
 	self:clearList()
 	local data = self.Data
-	self.Balance.Text = "YOUR POINTS: " .. formatNumber(data and data.Points)
-	for category, tab in pairs(self.CategoryTabs) do
-		tab.BackgroundColor3 = category == self.Category and palette.Teal or palette.White
-		tab.TextColor3 = category == self.Category and palette.White or palette.Muted
-	end
+	self.Balance.Text = "YOUR TOKENS: " .. formatNumber(data and data.Tokens)
 	local narrow = self.Phone
+	local inRound = attr("InRound") == true
 	for index, item in ipairs(Catalog.Items) do
-		if item.Category == self.Category then
-			local row = card(self.List, { Size = UDim2.new(1, -6, 0, narrow and 142 or 104), LayoutOrder = index, ZIndex = 23 })
-			local owned = data and data.Owned and data.Owned[item.Id]
-			local equipped = data and data.Equipped and data.Equipped[item.Category] == item.Id
-			local swatchColor = item.Color and Color3.fromRGB(unpack(item.Color)) or palette.LilacPale
-			local swatch = round(make("Frame", row, { Position = UDim2.fromOffset(12, 14), Size = UDim2.fromOffset(54, 54), BackgroundColor3 = swatchColor, BorderSizePixel = 0, ZIndex = 24 }), 16)
-			local icon = label(swatch, categoryIcons[item.Category] or "★", 25, UDim2.fromScale(0, 0), UDim2.fromScale(1, 1), palette.Ink, true)
-			icon.TextXAlignment = Enum.TextXAlignment.Center
-			label(row, item.Name, narrow and 14 or 16, UDim2.fromOffset(78, 11), UDim2.new(1, narrow and -90 or -206, 0, 30), palette.Ink, true)
-			label(row, item.Description, 11, UDim2.fromOffset(78, 43), UDim2.new(1, narrow and -90 or -206, 0, narrow and 41 or 44), palette.Muted)
-			local buyText = equipped and "EQUIPPED" or (owned and (item.Category == "Multiplier" and "OWNED" or "EQUIP") or (formatNumber(item.Price) .. " POINTS"))
-			local affordable = owned or (data and (data.Points or 0) >= item.Price)
-			local buy = button(row, buyText, narrow and UDim2.new(0, 12, 1, -45) or UDim2.new(1, -124, 0, 34), narrow and UDim2.new(1, -24, 0, 33) or UDim2.fromOffset(112, 38), equipped and palette.TealPale or (affordable and palette.Teal or palette.Disabled), equipped and palette.Teal or (affordable and palette.White or palette.Muted))
-			buy.TextSize = 11
-			buy.Activated:Connect(function() if self.Data then self.Callbacks.Shop("Buy", item.Id) end end)
-		end
+		local row = card(self.List, { Name = item.Id, Size = UDim2.new(1, -6, 0, narrow and 152 or 92), LayoutOrder = index, ZIndex = 23 })
+		local stock = data and data.Inventory and data.Inventory[item.Id] or 0
+		local full = stock >= (item.MaxStock or 5)
+		local affordable = data and (data.Tokens or 0) >= item.Price and not full and not inRound
+		local swatchColor = item.Color and Color3.fromRGB(unpack(item.Color)) or palette.LilacPale
+		local swatch = card(row, { Position = UDim2.fromOffset(12, 15), Size = UDim2.fromOffset(44, 44), ZIndex = 24 }, swatchColor)
+		local icon = label(swatch, supplyIcons[item.Id] or "+", 28, UDim2.fromScale(0, 0), UDim2.fromScale(1, 1), palette.Ink, true)
+		icon.TextXAlignment = Enum.TextXAlignment.Center
+		label(row, item.Name, narrow and 17 or 19, UDim2.fromOffset(68, 8), UDim2.new(1, narrow and -80 or -212, 0, 26), palette.Ink, true)
+		label(row, item.Description, 14, UDim2.fromOffset(68, 35), UDim2.new(1, narrow and -80 or -212, 0, narrow and 48 or 45), palette.Muted)
+		local stockLabel = label(row, "STOCK: " .. stock .. "/" .. (item.MaxStock or 5), 12, narrow and UDim2.fromOffset(12, 83) or UDim2.new(1, -130, 0, 60), narrow and UDim2.new(1, -24, 0, 22) or UDim2.fromOffset(118, 24), palette.Muted, true)
+		stockLabel.TextXAlignment = narrow and Enum.TextXAlignment.Left or Enum.TextXAlignment.Center
+		local buy = button(row, full and "STOCK FULL" or (inRound and "BUY IN LOBBY" or ("BUY  " .. formatNumber(item.Price) .. " TOKENS")), narrow and UDim2.new(0, 12, 1, -42) or UDim2.new(1, -130, 0, 15), narrow and UDim2.new(1, -24, 0, 32) or UDim2.fromOffset(118, 37), affordable and palette.Teal or palette.Disabled, affordable and palette.White or palette.Muted)
+		buy.Name = "Buy"
+		buy.TextSize = narrow and 14 or 13
+		buy.Active, buy.Selectable, buy.AutoButtonColor = affordable == true, affordable == true, affordable == true
+		buy.Activated:Connect(function() if self.Data and affordable then self.Callbacks.Shop("Buy", item.Id) end end)
 	end
 end
-function UI:profile(data, multiplier, _persistent)
+function UI:profile(data, _persistent)
 	self.Data = data
-	self.Coins.Text = formatNumber(data.Coins) .. " COINS"
-	self.Points.Text = formatNumber(data.Points) .. " POINTS"
-	self.Presses.Text = formatNumber(data.Wins) .. " wins  ·  " .. formatNumber(data.Presses) .. " presses  ·  " .. tostring(multiplier or 1) .. "× coins"
+	self.Tokens.Text = compactNumber(data.Tokens) .. " Tokens"
 	if self.Panel.Visible and self.Tab == "Shop" then self:renderShop() end
 end
 function UI:state(state)
 	local previous = self.State
 	self.State = state
 	local phase = state.Phase or "Waiting"
-	self.PhaseLabel.Text = phase == "Round" and (state.SuddenDeath and "SUDDEN DEATH" or ("ROUND " .. tostring(state.RoundNumber or 1) .. "  ·  " .. tostring(state.EventCount or 0) .. " EVENTS")) or (phase == "Intermission" and "NEXT ROUND STARTS SOON" or (phase == "Results" and "ROUND COMPLETE" or "WELCOME TO THE LOBBY"))
+	self.PhaseLabel.Text = phase == "Round" and (state.SuddenDeath and "SUDDEN DEATH" or ("ROUND " .. tostring(state.RoundNumber or 1))) or (phase == "Intermission" and "STARTING SOON" or (phase == "Results" and "RESULTS" or "LOBBY"))
 	self.PhaseLabel.TextColor3 = phase == "Round" and palette.CoralInk or (phase == "Results" and palette.Gold or palette.Teal)
-	self.RoundInfo.Text = phase == "Round" and (tostring(state.AliveCount or 0) .. " / " .. tostring(state.RoundPlayers or 0) .. " alive" .. (state.RoundMode == "Solo survival" and "  ·  SOLO" or "")) or (phase == "Results" and (state.Winner or "Round complete") or (tostring(state.QueuedCount or 0) .. " queued  ·  " .. tostring(state.LobbyCount or 0) .. " in lobby"))
-	self.EventTitle.Text = state.EventName or "PRESS FOR CHAOS"
-	self.EventDescription.Text = state.EventDescription or "The last survivor takes the crown."
-	self.EventMark.BackgroundColor3 = phase == "Results" and palette.Gold or (phase == "Round" and palette.Coral or palette.Teal)
-	self.Event.Visible = true
+	self.RoundInfo.Text = phase == "Round" and (state.RoundMode == "Solo survival" and "SOLO SURVIVAL" or (tostring(state.AliveCount or 0) .. " / " .. tostring(state.RoundPlayers or 0) .. " alive")) or (phase == "Results" and "Next round soon" or (tostring(state.QueuedCount or 0) .. " queued"))
+	self.EventTitle.Text = phase == "Round" and state.EventStage == "Cooldown" and "CATCH YOUR BREATH" or (state.EventName or "PRESS FOR CHAOS")
+	self.EventDescription.Text = phase == "Round" and state.EventStage == "Cooldown" and "The next press starts a new hazard." or (state.EventDescription or "The last survivor takes the crown.")
+	local category = string.lower(tostring(state.EventCategory or ""))
+	self.EventMark.BackgroundColor3 = phase == "Results" and palette.Gold or (phase ~= "Round" and palette.Teal or ((category == "role" or category == "chase") and palette.Lilac or ((tonumber(state.EventIntensity) or 2) <= 1 and palette.Teal or palette.Coral)))
+	self.Event.Visible = not self.Panel.Visible
 	if self.Panel.Visible and self.Tab == "Roster" then self:renderRoster() end
+	if self.Panel.Visible and self.Tab == "Shop" then self:renderShop() end
+	if phase == "Results" and type(state.Results) == "table" then
+		if self.ShownResultsRound ~= state.RoundNumber then
+			self.ShownResultsRound = state.RoundNumber
+			self:open("Results")
+		elseif self.Panel.Visible and self.Tab == "Results" then self:renderResults() end
+	elseif self.Panel.Visible and self.Tab == "Results" then self:close() end
 	if previous and state.EventId ~= previous.EventId and phase == "Round" and state.Presser and state.Presser ~= "" then
 		self:toast(tostring(state.Presser) .. " pressed the button!", "event")
 	end
 	self:tick(self.Nearby)
 end
-function UI:spectating(name, atEnd)
+function UI:spectating(name, index, total)
 	self.SpectatingName = name
-	self.Spectate.Text = name and (atEnd and "STOP" or "NEXT >") or "WATCH"
+	self.Watching.Text = name and (self.Phone and name or ("WATCHING " .. name)) or ""
+	self.WatchPrevious.Active = (total or 0) > 1
+	self.WatchNext.Active = (total or 0) > 1
+	self.WatchPrevious.AutoButtonColor = self.WatchPrevious.Active
+	self.WatchNext.AutoButtonColor = self.WatchNext.Active
+	self.Spectator.Visible = name ~= nil and not self.Panel.Visible
+	self.WatchIndex = index
+	self:tick(self.Nearby)
+end
+function UI:countdown(seconds)
+	self.Countdown.Visible = seconds >= 0
+	self.Countdown.Text = seconds == 0 and "GO!" or (tostring(seconds) .. "s")
+	self.EventTitle.Size = UDim2.new(1, self.Countdown.Visible and -87 or -32, 0, 21)
 end
 function UI:tick(nearby)
 	self.Nearby = nearby == true
@@ -335,10 +374,11 @@ function UI:tick(nearby)
 	self.Hint.TextColor3 = palette.Ink
 	local endsAt = phase == "Round" and state.RoundEndsAt or state.PhaseEndsAt
 	self.Timer.Text = phase == "Round" and state.SuddenDeath and "OT" or (endsAt and endsAt > 0 and timer(endsAt - now) or "--:--")
-	self.Press.Visible, self.Queue.Visible = inRound, not inRound
-	self.Spectate.Visible = not inRound and phase == "Round" and (state.AliveCount or 0) > 0
+	self.Press.Visible, self.Queue.Visible = inRound and self.Nearby and not state.SuddenDeath, not inRound
+	self.Spectate.Visible = not inRound and not self.SpectatingName and phase == "Round" and (state.AliveCount or 0) > 0
+	self.Spectator.Visible = self.SpectatingName ~= nil and not inRound and phase == "Round" and not self.Panel.Visible
 	self.Queue.Size = self.Spectate.Visible and UDim2.new(0.65, -4, 1, 0) or UDim2.fromScale(1, 1)
-	self.Queue.Text = queued and "QUEUED  ·  LEAVE" or "JOIN NEXT ROUND"
+	self.Queue.Text = queued and "QUEUED  ·  LEAVE" or "JOIN ROUND"
 	self.Queue.BackgroundColor3 = queued and palette.GoldPale or palette.Teal
 	self.Queue.TextColor3 = queued and palette.Gold or palette.White
 	local remaining = math.max(0, (state.ReadyAt or 0) - now)
@@ -349,37 +389,44 @@ function UI:tick(nearby)
 	self.Press.Active, self.Press.Selectable = self.CanPress, self.CanPress
 	self.Press.AutoButtonColor = self.CanPress
 	if state.SuddenDeath then self.Press.Text = "SURVIVE THE STORM"
-	elseif remaining > 0 then self.Press.Text = "NEXT CHAOS IN " .. tostring(math.ceil(remaining)) .. "s"
-	elseif not self.Nearby then self.Press.Text = "GET TO THE BUTTON"
-	else self.Press.Text = "PRESS FOR CHAOS" end
+	elseif remaining > 0 then self.Press.Text = "NEXT PRESS  " .. tostring(math.ceil(remaining)) .. "s"
+	else self.Press.Text = self.Touch and "PRESS FOR CHAOS" or "PRESS  [E / X]" end
 	self.Press.BackgroundColor3 = self.CanPress and palette.CoralButton or palette.Disabled
 	self.Press.TextColor3 = self.CanPress and palette.White or palette.Muted
+	self.Actions.Visible = not self.Panel.Visible and (self.Press.Visible or self.Queue.Visible)
+	self.Hint.Text = ""
+	self.Hint.Visible = false
 	if inRound then
-		local role = attr("Role")
-		local threat = state.ThreatLevel
-		local danger = state.SuddenDeath and "SUDDEN DEATH" or (threat and (type(threat) == "number" and ("CHAOS " .. tostring(threat) .. "/5") or tostring(threat)) or "STAY ALIVE")
-		local eventHint = attr("EventHint")
+		local role = attr("PrivateRole") or attr("Role")
+		local eventHint = attr("PrivateHint") or attr("EventHint")
 		local eventTimer = attr("EventTimer")
-		local instructions = eventHint and eventHint ~= "" and tostring(eventHint) or (self.Short and state.EventDescription or nil)
-		self.Hint.Text = instructions and instructions ~= "" and instructions or (role and role ~= "" and (string.upper(tostring(role)) .. "  ·  " .. danger) or (danger .. "  ·  E / X / TAP TO PRESS"))
+		local personalInstructions = eventHint and eventHint ~= "" and not sameText(eventHint, state.EventDescription)
+		if personalInstructions then
+			self.EventDescription.Text = tostring(eventHint)
+		elseif state.EventStage ~= "Cooldown" then
+			self.EventDescription.Text = state.EventDescription or "Survive the chaos."
+		end
+		local specialRole = role and role ~= "" and role ~= "Survivor" and role ~= "Lobby" and role ~= "Spectator"
+		self.Hint.Text = personalInstructions and specialRole and not sameText(role, self.EventDescription.Text) and string.upper(tostring(role)) or ""
 		if type(eventTimer) == "number" then
-			self.Hint.Text = "BOMB " .. tostring(math.max(0, math.ceil(eventTimer - now))) .. "s  ·  " .. self.Hint.Text
+			self.Hint.Text = "BOMB  " .. tostring(math.max(0, math.ceil(eventTimer - now))) .. "s"
 		end
 		self.Hint.TextColor3 = type(eventTimer) == "number" and palette.CoralInk or palette.Ink
-	elseif self.SpectatingName then self.Hint.Text = "WATCHING " .. string.upper(self.SpectatingName) .. "  ·  WATCH TO SWITCH"
-	elseif queued then self.Hint.Text = phase == "Round" and "You're in the next round. Watch the chaos while you wait." or "You're on the list. Get ready!"
-	elseif attr("Status") == "Eliminated" then self.Hint.Text = "Out this round. Queue up for your comeback."
-	else self.Hint.Text = "Join the next round. Last survivor wins." end
+	elseif queued then self.Hint.Text = "QUEUED FOR THE NEXT ROUND"
+	elseif attr("Status") == "Eliminated" then self.Hint.Text = "OUT THIS ROUND. MAKE A COMEBACK." end
+	self.Hint.Visible = self.Hint.Text ~= ""
+	self.EventDescription.Size = UDim2.new(1, -34, 0, self.Phone and (self.Hint.Visible and 57 or 70) or (self.Hint.Visible and 42 or 50))
 	self.Health.Visible = inRound and not self.Panel.Visible
 	if humanoid then
 		local fraction = math.clamp(humanoid.Health / math.max(1, humanoid.MaxHealth), 0, 1)
-		self.HealthLabel.Text = "HEALTH " .. tostring(math.ceil(math.max(0, humanoid.Health)))
+		self.HealthLabel.Text = "HP " .. tostring(math.ceil(math.max(0, humanoid.Health)))
 		self.HealthFill.Size = UDim2.fromScale(fraction, 1)
 		local color = fraction < 0.3 and palette.CoralInk or (fraction < 0.6 and palette.Gold or palette.Teal)
 		self.HealthFill.BackgroundColor3, self.HealthLabel.TextColor3 = color, color
 	end
 end
 function UI:toast(message, kind)
+	if kind == "event" and (sameText(message, self.State and self.State.EventDescription) or sameText(message, attr("PrivateHint") or attr("EventHint"))) then return end
 	self.ToastToken = (self.ToastToken or 0) + 1
 	local token = self.ToastToken
 	self.Toast.Visible = true
@@ -393,6 +440,40 @@ function UI:leaders(entries, labelText)
 	self.LeaderboardLabel = labelText
 	if self.Panel.Visible and self.Tab == "Leaderboard" then self:renderLeaders() end
 end
+function UI:renderResults()
+	local results = self.State and self.State.Results or {}
+	local winner = results.WinnerName
+	local outcome = tostring(results.Outcome or "Round complete")
+	local titles = {
+		Winner = "WE HAVE A WINNER!", SoloSurvived = "YOU SURVIVED!", SoloFailed = "BETTER LUCK NEXT ROUND",
+		Timeout = "STORM DRAW - NO WINNER", Wipeout = "EVERYONE WAS ELIMINATED", Cancelled = "ROUND CANCELLED", NoContest = "NO BUTTON PRESS - NO CONTEST",
+	}
+	self.PanelTitle.Text = titles[outcome] or "ROUND RESULTS"
+	self.PanelSubtitle.Text = winner and winner ~= "" and (winner .. " wins round " .. tostring(self.State.RoundNumber or "") .. "!") or ("Round " .. tostring(self.State and self.State.RoundNumber or "") .. " complete. Your earned Tokens are shown below.")
+	self:listLayout(false)
+	self:clearList()
+	local rows = {}
+	for _, entry in ipairs(results.Rows or {}) do table.insert(rows, entry) end
+	table.sort(rows, function(a, b)
+		if (a.Place or 999) == (b.Place or 999) then return (a.UserId or 0) < (b.UserId or 0) end
+		return (a.Place or 999) < (b.Place or 999)
+	end)
+	for index, entry in ipairs(rows) do
+		local isYou = entry.UserId == Players.LocalPlayer.UserId
+		local isWinner = entry.UserId == results.WinnerUserId
+		local row = card(self.List, { Name = "Result_" .. tostring(entry.UserId), Size = UDim2.new(1, -6, 0, self.Phone and 87 or 68), LayoutOrder = index, ZIndex = 23 }, isYou and palette.LilacPale or palette.White)
+		local rank = label(row, "#" .. tostring(entry.Place or index), 23, UDim2.fromOffset(10, 9), UDim2.fromOffset(43, 40), isWinner and palette.Gold or palette.Muted, true)
+		rank.TextXAlignment = Enum.TextXAlignment.Center
+		label(row, tostring(entry.Name or "Player") .. (isYou and " (YOU)" or ""), self.Phone and 16 or 18, UDim2.fromOffset(63, 7), UDim2.new(1, self.Phone and -75 or -212, 0, 28), palette.Ink, true)
+		label(row, isWinner and "WINNER" or (entry.Survived and "SURVIVED" or "ELIMINATED"), 12, UDim2.fromOffset(63, 35), UDim2.new(1, -75, 0, 22), entry.Survived and palette.Teal or palette.CoralInk, true)
+		local reward = label(row, "+" .. formatNumber(entry.Tokens) .. " TOKENS  |  " .. tostring(entry.KOs or 0) .. " KOs", self.Phone and 12 or 13, self.Phone and UDim2.fromOffset(63, 58) or UDim2.new(1, -188, 0, 20), self.Phone and UDim2.new(1, -75, 0, 21) or UDim2.fromOffset(176, 28), palette.Gold, true)
+		reward.TextXAlignment = self.Phone and Enum.TextXAlignment.Left or Enum.TextXAlignment.Right
+	end
+	if #rows == 0 then
+		local empty = card(self.List, { Size = UDim2.new(1, -6, 0, 70), ZIndex = 23 })
+		label(empty, "The next round is starting soon. Join the queue to play!", 16, UDim2.fromOffset(14, 10), UDim2.new(1, -28, 1, -20), palette.Muted)
+	end
+end
 function UI:renderLeaders()
 	self.PanelTitle.Text = "HALL OF SURVIVORS"
 	self.PanelSubtitle.Text = self.LeaderboardLabel or "Most survival wins. Outlast the chaos and climb the ranks."
@@ -405,10 +486,10 @@ function UI:renderLeaders()
 	for rank, entry in ipairs(self.Entries) do
 		local row = card(self.List, { Size = UDim2.new(1, -6, 0, 66), LayoutOrder = rank, ZIndex = 23 }, rank <= 3 and palette.GoldPale or palette.White)
 		label(row, rank <= 3 and ("★ " .. rank) or ("#" .. rank), 18, UDim2.fromOffset(14, 15), UDim2.fromOffset(52, 35), rank <= 3 and palette.Gold or palette.Muted, true)
-		label(row, entry.Name or "Player", self.Phone and 12 or 15, UDim2.fromOffset(72, 12), UDim2.new(1, -180, 0, 39), palette.Ink, true)
+		label(row, entry.Name or "Player", self.Phone and 15 or 18, UDim2.fromOffset(72, 12), UDim2.new(1, -180, 0, 39), palette.Ink, true)
 		local score = label(row, formatNumber(entry.Wins), 16, UDim2.new(1, -101, 0, 11), UDim2.fromOffset(85, 26), palette.Teal, true)
 		score.TextXAlignment = Enum.TextXAlignment.Right
-		local caption = label(row, "WINS", 9, UDim2.new(1, -101, 0, 36), UDim2.fromOffset(85, 15), palette.Muted)
+		local caption = label(row, "WINS", 11, UDim2.new(1, -101, 0, 36), UDim2.fromOffset(85, 15), palette.Muted)
 		caption.TextXAlignment = Enum.TextXAlignment.Right
 	end
 end
@@ -435,15 +516,15 @@ function UI:renderRoster()
 			local row = card(self.List, { Size = UDim2.new(1, -6, 0, self.Phone and 81 or 72), LayoutOrder = order, ZIndex = 23 })
 			local ink, tint = statusColor(entry.Status)
 			local avatar = round(make("Frame", row, { Position = UDim2.fromOffset(12, 13), Size = UDim2.fromOffset(39, 39), BackgroundColor3 = tint, BorderSizePixel = 0, ZIndex = 24 }), 20)
-			local initial = label(avatar, string.upper(string.sub(entry.Name or "?", 1, 1)), 19, UDim2.fromScale(0, 0), UDim2.fromScale(1, 1), ink, true)
+			local initial = label(avatar, initialOf(entry.Name or "?"), 19, UDim2.fromScale(0, 0), UDim2.fromScale(1, 1), ink, true)
 			initial.TextXAlignment = Enum.TextXAlignment.Center
 			local playerName = (entry.Name or "Player") .. (entry.UserId == Players.LocalPlayer.UserId and " (YOU)" or "")
-			label(row, playerName, self.Phone and 12 or 14, UDim2.fromOffset(62, 10), UDim2.new(1, -160, 0, 27), palette.Ink, true)
+			label(row, playerName, self.Phone and 15 or 17, UDim2.fromOffset(62, 10), UDim2.new(1, -160, 0, 27), palette.Ink, true)
 			local role = entry.Role and entry.Role ~= "" and ("  ·  " .. tostring(entry.Role)) or ""
-			label(row, tostring(entry.Status or "Lobby") .. role, 10, UDim2.fromOffset(62, 39), UDim2.new(1, -160, 0, 24), ink)
+			label(row, tostring(entry.Status or "Lobby") .. role, 12, UDim2.fromOffset(62, 39), UDim2.new(1, -160, 0, 24), ink)
 			local score = label(row, tostring(entry.Wins or 0) .. " WINS", 11, UDim2.new(1, -93, 0, 13), UDim2.fromOffset(78, 23), palette.Gold, true)
 			score.TextXAlignment = Enum.TextXAlignment.Right
-			local presses = label(row, formatNumber(entry.Presses) .. " presses", 9, UDim2.new(1, -99, 0, 39), UDim2.fromOffset(84, 23), palette.Muted)
+			local presses = label(row, formatNumber(entry.Presses) .. " presses", 11, UDim2.new(1, -99, 0, 39), UDim2.fromOffset(84, 23), palette.Muted)
 			presses.TextXAlignment = Enum.TextXAlignment.Right
 		end
 	end

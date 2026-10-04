@@ -37,13 +37,10 @@ function Data.push(player)
 	if stats then
 		stats.Presses.Value = data.Presses
 		stats.Wins.Value = data.Wins
-		stats.Coins.Value = data.Coins
-		stats["Button Points"].Value = data.Points
+		stats.Tokens.Value = data.Tokens
+		stats.KOs.Value = data.KOs
 	end
-	player:SetAttribute("Skin", data.Equipped.Skin)
-	player:SetAttribute("Title", data.Equipped.Title)
-	player:SetAttribute("Pet", data.Equipped.Pet)
-	Data.Remotes.Profile:FireClient(player, Profile.copy(data), Economy.multiplier(data, Catalog), persistent)
+	Data.Remotes.Profile:FireClient(player, Profile.copy(data), persistent)
 end
 function Data.load(player)
 	if Data.Closing then return end
@@ -59,7 +56,7 @@ function Data.load(player)
 						return nil
 					end
 					return {
-						Profile = Profile.normalize(old.Profile, Catalog, Config.StartingCoins),
+						Profile = Profile.normalize(old.Profile, Catalog, Config.StartingTokens),
 						Session = { Id = sessionId, UpdatedAt = os.time() },
 					}
 				end)
@@ -77,7 +74,7 @@ function Data.load(player)
 			return
 		end
 	else
-		profile = Profile.new(Config.StartingCoins)
+		profile = Profile.new(Config.StartingTokens)
 	end
 	Data.Records[player] = { Profile = profile, LastSaved = os.time(), Saving = false }
 	if player.Parent ~= Players or Data.Closing then
@@ -86,7 +83,7 @@ function Data.load(player)
 	end
 	local stats = Instance.new("Folder")
 	stats.Name = "leaderstats"
-	for _, name in ipairs({ "Wins", "Presses", "Coins", "Button Points" }) do
+	for _, name in ipairs({ "Wins", "KOs", "Presses", "Tokens" }) do
 		local value = Instance.new("IntValue")
 		value.Name = name
 		value.Parent = stats
@@ -98,16 +95,18 @@ function Data.load(player)
 	status.Parent = stats
 	Data.push(player)
 end
-function Data.award(player, coins, points)
+function Data.award(player, tokens)
 	local data = Data.get(player)
 	if not data then return end
-	local earned = Economy.awardCoins(data, coins or 0, Catalog)
-	data.Points += points or 0
+	local earned = Economy.award(data, tokens or 0)
 	Data.push(player)
 	return earned
 end
-function Data.awardAll(coins, points)
-	for player in pairs(Data.Records) do Data.award(player, coins, points) end
+function Data.knockout(player)
+	local data = Data.get(player)
+	if not data then return 0 end
+	data.KOs = math.min(1e12, data.KOs + 1)
+	return Data.award(player, Config.KnockoutTokens)
 end
 function Data.finishRound(player, won, survived)
 	local data = Data.get(player)
@@ -115,10 +114,11 @@ function Data.finishRound(player, won, survived)
 	data.Rounds += 1
 	if won then data.Wins += 1 end
 	if survived then
-		Data.award(player, won and Config.WinnerCoins or 40, won and Config.WinnerPoints or 8)
+		return Data.award(player, won and Config.WinnerTokens or Config.SoloTokens)
 	else
 		Data.push(player)
 	end
+	return 0
 end
 function Data.save(player, release)
 	local record = Data.Records[player]

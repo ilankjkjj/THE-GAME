@@ -1,0 +1,138 @@
+[
+  {
+    "file": "button.wav",
+    "duration": 0.18,
+    "sample_rate": 22050,
+    "channels": 1,
+    "peak": 0.78,
+    "rms": 0.1237
+  },
+  {
+    "file": "warning.wav",
+    "duration": 0.8,
+    "sample_rate": 22050,
+    "channels": 1,
+    "peak": 0.78,
+    "rms": 0.2983
+  },
+  {
+    "file": "impact.wav",
+    "duration": 0.65,
+    "sample_rate": 22050,
+    "channels": 1,
+    "peak": 0.78,
+    "rms": 0.1294
+  },
+  {
+    "file": "eruption.wav",
+    "duration": 1.8,
+    "sample_rate": 22050,
+    "channels": 1,
+    "peak": 0.78,
+    "rms": 0.0997
+  },
+  {
+    "file": "storm.wav",
+    "duration": 1.8,
+    "sample_rate": 22050,
+    "channels": 1,
+    "peak": 0.78,
+    "rms": 0.1591
+  },
+  {
+    "file": "scifi.wav",
+    "duration": 1.2,
+    "sample_rate": 22050,
+    "channels": 1,
+    "peak": 0.78,
+    "rms": 0.3224
+  },
+  {
+    "file": "whoosh.wav",
+    "duration": 0.7,
+    "sample_rate": 22050,
+    "channels": 1,
+    "peak": 0.78,
+    "rms": 0.1805
+  },
+  {
+    "file": "reward.wav",
+    "duration": 1.05,
+    "sample_rate": 22050,
+    "channels": 1,
+    "peak": 0.78,
+    "rms": 0.1781
+  },
+  {
+    "file": "gunshot.wav",
+    "duration": 0.28,
+    "sample_rate": 22050,
+    "channels": 1,
+    "peak": 0.78,
+    "rms": 0.1105
+  },
+  {
+    "file": "sword.wav",
+    "duration": 0.42,
+    "sample_rate": 22050,
+    "channels": 1,
+    "peak": 0.78,
+    "rms": 0.1981
+  },
+  {
+    "file": "role.wav",
+    "duration": 0.9,
+    "sample_rate": 22050,
+    "channels": 1,
+    "peak": 0.78,
+    "rms": 0.3176
+  },
+  {
+    "file": "supply.wav",
+    "duration": 0.7,
+    "sample_rate": 22050,
+    "channels": 1,
+    "peak": 0.78,
+    "rms": 0.3048
+  },
+  {
+    "file": "checkpoint.wav",
+    "duration": 0.35,
+    "sample_rate": 22050,
+    "channels": 1,
+    "peak": 0.78,
+    "rms": 0.2129
+  },
+  {
+    "file": "obby.wav",
+    "duration": 1.1,
+    "sample_rate": 22050,
+    "channels": 1,
+    "peak": 0.78,
+    "rms": 0.174
+  },
+  {
+    "file": "purchase.wav",
+    "duration": 0.35,
+    "sample_rate": 22050,
+    "channels": 1,
+    "peak": 0.78,
+    "rms": 0.2282
+  },
+  {
+    "file": "knockout.wav",
+    "duration": 0.7,
+    "sample_rate": 22050,
+    "channels": 1,
+    "peak": 0.78,
+    "rms": 0.1637
+  },
+  {
+    "file": "victory.wav",
+    "duration": 1.6,
+    "sample_rate": 22050,
+    "channels": 1,
+    "peak": 0.78,
+    "rms": 0.1913
+  }
+]

@@ -17,19 +17,20 @@
         "$className": "Part",
         "$properties": {
           "Anchored": true, "Size": [100, 4, 80], "Position": [220, 8, 0],
-          "Color": [0.467, 0.792, 0.435], "Material": "Grass"
+          "Color": [0.294, 0.592, 0.294], "Material": "Plastic", "TopSurface": "Studs"
         }
       },
       "EditorSpawn": {
         "$className": "SpawnLocation",
-        "$properties": { "Anchored": true, "Neutral": true, "Duration": 0, "Size": [8, 0.2, 8], "Position": [220, 10.2, 15], "Color": [0.169, 0.745, 0.702] }
+        "$properties": { "Anchored": true, "Neutral": true, "Duration": 0, "Size": [8, 0.2, 8], "Position": [220, 9.8, 15], "Transparency": 1, "CanCollide": false, "CanTouch": false, "CanQuery": false }
       }
     },
     "Lighting": {
       "$properties": {
-        "Ambient": [0.569, 0.643, 0.682], "OutdoorAmbient": [0.686, 0.745, 0.745],
-        "Brightness": 2.8, "ClockTime": 13.8, "GlobalShadows": true,
-        "ColorShift_Top": [1, 0.898, 0.753], "ExposureCompensation": 0.08
+        "Ambient": [0.502, 0.502, 0.502], "OutdoorAmbient": [0.502, 0.502, 0.502],
+        "Brightness": 2, "ClockTime": 13.8, "GlobalShadows": true,
+        "ColorShift_Top": [0, 0, 0], "ColorShift_Bottom": [0, 0, 0], "ExposureCompensation": 0,
+        "EnvironmentDiffuseScale": 0, "EnvironmentSpecularScale": 0
       }
     },
     "SoundService": { "$properties": { "RespectFilteringEnabled": true } }

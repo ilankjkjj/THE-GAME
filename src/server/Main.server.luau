@@ -1,14 +1,13 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Teams = game:GetService("Teams")
-local Debris = game:GetService("Debris")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared.Config)
 local Catalog = require(Shared.Catalog)
 local Economy = require(Shared.Economy)
 local Profile = require(Shared.Profile)
 local Data = require(script.Parent.DataService)
-local Cosmetics = require(script.Parent.Cosmetics)
+local Roles = require(script.Parent.RoleDisplay)
 local World = require(script.Parent.World).build()
 local function team(name, color, auto)
 	local object = Teams:FindFirstChild(name) or Instance.new("Team")
@@ -23,7 +22,7 @@ if existing then existing:Destroy() end
 local network = Instance.new("Folder")
 network.Name = "ButtonNetwork"
 local remotes = {}
-for _, name in ipairs({ "Press", "Queue", "Shop", "Profile", "State", "Toast", "Countdown", "Leaderboard" }) do
+for _, name in ipairs({ "Press", "Queue", "Shop", "Profile", "State", "Toast", "Countdown", "Leaderboard", "Cue", "PrivateState" }) do
 	local remote = Instance.new("RemoteEvent")
 	remote.Name = name
 	remote.Parent = network
@@ -41,30 +40,33 @@ local function allow(player, channel, interval)
 	limits[channel] = os.clock() + interval
 	return true
 end
-local function refreshCosmetics(player) Cosmetics.apply(player, Data.get(player)) end
-local function sound(player)
-	local data = player and Data.get(player)
-	local item = data and Catalog.ById[data.Equipped.Sound]
-	local object = Instance.new("Sound")
-	object.SoundId = item and item.Sound or "rbxasset://sounds/action_jump_land.mp3"
-	object.PlaybackSpeed = item and item.Pitch or 1.2
-	object.Volume = 0.45
-	object.RollOffMaxDistance = 155
-	object.Parent = World.Button
-	object:Play()
-	Debris:AddItem(object, 5)
+local function refreshRole(player) Roles.apply(player) end
+local rounds
+local function sound()
+	remotes.Cue:FireAllClients({ Kind = "press", Position = World.Button.Position, Strength = 0.45,
+		RoundId = rounds.RoundId })
 end
-local rounds = require(script.Parent.RoundService).new({
-	World = World, Data = Data, Remotes = remotes, RefreshCosmetics = refreshCosmetics,
+local supplies = require(script.Parent.Supplies).new(Data, remotes)
+local obby = require(script.Parent.ObbyService).new(World, Data, remotes)
+rounds = require(script.Parent.RoundService).new({
+	World = World, Data = Data, Remotes = remotes, RefreshRole = refreshRole, Supplies = supplies, Obby = obby,
 	PlaySound = sound, LobbyTeam = lobbyTeam, ArenaTeam = arenaTeam,
+	StudioPreview = game:GetService("RunService"):IsStudio(),
 })
+if game:GetService("RunService"):IsStudio() then
+	local preview = Instance.new("BindableEvent")
+	preview.Name = "StudioDisasterPreview"
+	preview.Parent = script.Parent
+	preview.Event:Connect(function(eventId)
+		if not rounds:preview(eventId) then warn("[Survival] Preview needs an active round and a valid event with enough survivors.") end
+	end)
+end
 Data.init(remotes)
 bootstrap.OnServerInvoke = function(player)
 	if not allow(player, "bootstrap", 0.5) then return nil end
 	local data = Data.get(player)
 	return {
 		State = table.clone(rounds.State), Profile = data and Profile.copy(data),
-		Multiplier = data and Economy.multiplier(data, Catalog) or 1,
 		Persistent = not game:GetService("RunService"):IsStudio() or Config.PersistenceInStudio,
 		Leaderboard = leaderboard, LeaderboardLabel = leaderboardLabel,
 	}
@@ -97,25 +99,27 @@ remotes.Shop.OnServerEvent:Connect(function(player, action, value)
 	local data = Data.get(player)
 	if not data then return end
 	local ok, message
-	if action == "Buy" then ok, message = Economy.purchase(data, value, Catalog)
-	elseif action == "Unequip" then ok, message = Economy.unequip(data, value, Catalog)
-	else return end
+	if action ~= "Buy" then return end
+	if rounds:isAlive(player) then remotes.Toast:FireClient(player, "Buy supplies in the lobby for your next round.", "info"); return end
+	ok, message = Economy.purchase(data, value, Catalog)
 	remotes.Toast:FireClient(player, message, ok and "good" or "info")
-	if ok then Data.push(player); refreshCosmetics(player); rounds:publish() end
+	if ok then Data.push(player); rounds:publish(); remotes.Cue:FireClient(player, { Kind = "purchase", Local = true, Strength = 0.7 }) end
 end)
 local function added(player)
 	player:SetAttribute("Queued", false)
 	rounds:setStatus(player, "Lobby")
-	player.CharacterAdded:Connect(function(character) rounds:character(player, character) end)
+	player.CharacterAdded:Connect(function(character) obby:reset(player); rounds:character(player, character) end)
 	if player.Character then task.spawn(function() rounds:character(player, player.Character) end) end
 	Data.load(player)
 	if not Data.get(player) or player.Parent ~= Players then return end
 	rounds:added(player)
-	refreshCosmetics(player)
+	refreshRole(player)
 end
 Players.PlayerAdded:Connect(added)
 Players.PlayerRemoving:Connect(function(player)
 	rounds:removed(player)
+	supplies:clear(player)
+	obby:removed(player)
 	lastRequests[player] = nil
 	Data.save(player, true)
 end)

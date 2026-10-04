@@ -1,6 +1,6 @@
 # DON'T PRESS THE BUTTON
 
-A Roblox survival party game: twelve colorful floating cottages, narrow bridges, one giant red button, and a new hazard whenever someone presses it. Survive longer than everyone else to win. A separate sunny lobby lets players queue, spectate, shop, or practice a safe hopping course between rounds.
+A Roblox survival party game: twelve full-size walk-in houses, studded islands, one giant red button, and a new hazard whenever someone presses it. Survive longer than everyone else to win. A separate sunny lobby lets players queue, spectate, shop, or practice a checkpoint obby for tokens between rounds.
 
 Made for **Argon 2**, with plain Luau, Roblox's bundled assets, and no external game packages or paid models.
 
@@ -9,7 +9,7 @@ Made for **Argon 2**, with plain Luau, Roblox's bundled assets, and no external 
 1. Install [Rokit](https://github.com/rojo-rbx/rokit) if you do not already have Argon. In this folder, run `rokit install` to install the versions pinned in `rokit.toml`.
 2. Run `powershell -ExecutionPolicy Bypass -File scripts/build.ps1`.
 3. Open `build/DontPressTheButton.rbxl` in Roblox Studio. The complete floating arena and lobby are visible in the editor.
-4. Press **Play**. Players join the next-round queue automatically. Use **JOIN NEXT ROUND** to rejoin the queue, or **QUEUED · LEAVE** to take a break. The lobby portal also has a join prompt.
+4. Press **Play**. Players join the next-round queue automatically. Use **JOIN NEXT ROUND** to rejoin the queue, or **QUEUED Â· LEAVE** to take a break. The lobby portal also has a join prompt.
 5. After the lobby countdown, players appear on their islands. Reach the central button and press **E**, controller **X**, tap its prompt, click the physical button, or use the on-screen press action.
 
 The simpler `argon build default.project.json -o build/Game.rbxl` also works. That place generates the full arena and lobby when Play starts. Use the full build above for a map visible in the editor.
@@ -25,94 +25,84 @@ The project maps `src/shared` to `ReplicatedStorage.Shared`, `src/server` to `Se
 
 The project and VS Code recommendations are included. `sourcemap.json` is generated locally. `World.luau` constructs the arena, cottages, lobby, boards, and lighting; runtime construction replaces the preview map. Unknown Workspace instances are preserved during sync. See the [Argon project format](https://argon.wiki/api/project).
 
-## Survival rounds
+## Button-controlled rounds
 
-- **15-second intermission:** queued players prepare in the protected lobby. Up to **12 players** enter each round; late arrivals wait for the next one.
-- **150-second round:** button presses start random events. Each event has its own instructions, effects, and danger. Events run one at a time, with a short pause between them. The arena also starts events automatically if nobody presses.
-- **Last survivor wins:** falling off, dying, or resetting a character ends that player's life for the current round. Eliminated players return to the lobby, can watch the survivors, and remain queued unless they leave the queue.
-- **Sudden death:** if multiple players remain when time runs out, coral rings warn of storm strikes. Dodge before they hit; rings widen as overtime continues. A last survivor wins, or the round ends in a draw after 60 seconds without a winner reward.
-- **8-second results:** competitive winners receive **120 base coins, 20 Button Points, and 1 win**. The arena resets before the next round.
-- **Solo practice:** one player can test a complete survival round. Surviving the timer gives **40 base coins and 8 points**; competitive wins require a round that started with at least two players.
+- A 15-second intermission boards up to 12 queued players. Late arrivals remain in the protected lobby.
+- Rounds last 150 seconds. **Only a living, nearby player's button press starts an event.** Nothing auto-starts during idle time; there is no automatic overtime storm or special-press countdown.
+- Events run one at a time. After cleanup, the button becomes available in two seconds. Disasters get more dangerous as round threat increases; the event selector avoids the previous four events and gives PvP a strong chance in multiplayer.
+- Death, falling, resetting, or leaving the queue ends that player's round life. The last survivor wins. Multiple survivors at the time limit draw.
+- Results show the winner, placements, knockouts and each player's tokens earned during the round. The server returns everyone to the lobby; **RETURN TO LOBBY** dismisses the results screen.
+- An idle round with no button press ends as **NO CONTEST**, with no win or survival bonus. Solo practice rewards require at least one event and never count as competitive wins.
 
-Every accepted player press earns **1 Button Point**, **1 lifetime press**, and **2 base coins**. Only living round participants within 15 studs of the physical button can press. Rejected presses award nothing. Surviving a completed event earns **8 base coins and 2 points**, and some events offer extra pickups or role rewards.
+## Events and PvP
 
-Hazards target active round participants. The lobby has its own spawn pads and stays outside the arena's damage and collection rules. Temporary event visuals, jobs, roles, movement changes, and island mutations are cleaned up when events end or the round finishes. Falling out of the arena eliminates a survivor; falling from the lobby returns a visitor to safety.
+The bank contains **41 events**, including five equipment-based PvP events:
 
-## Random events
-
-The event catalog currently contains **29 events**. Selection avoids repeating the previous event, respects minimum player counts, and gives fewer calm events as the round's threat level rises.
-
-| Event | What happens |
+| Event | Play |
 | --- | --- |
-| Cops & Robbers | A blue cop chases a red robber after a head start. Capture and escape earn different rewards. |
-| The Lava Is Rising | Lava climbs toward the islands; emergency stairs and high roofs offer refuge. |
-| Laser Limbo | A pink beam sweeps across the arena. Jump over it. |
-| Meteor Mayhem | Red warning circles reveal where meteors will strike. |
-| Chicken's Revenge | A giant chicken pursues the nearest survivor. |
-| Zombie Outbreak | Three zombies chase players across the islands. |
-| Hot Potato | Pass a bomb by tagging another survivor before its eight-second fuse runs out. |
-| Musical Islands | Reach a green island before the safety window closes. Safe islands change during the event. |
-| Now You See It... | Marked islands, their cottages, and their bridges become unsafe after a warning. |
-| Honey, I Shrunk the Islands | Outer floors contract, leaving smaller places to stand. |
-| Acid Rain | Green emergency umbrellas protect players from damaging rain. |
-| Tidal Trouble | A blue wave crosses the map; climb high or jump clear. |
-| Jump! Jump! Jump! | Expanding golden shockwaves sweep outward from the button. |
-| Ice Ice Maybe | Low-friction icy islands and bridges make movement slippery. |
-| Moon Walk | Round participants get floaty jumps while the lobby keeps normal gravity. |
-| Speed Limit: None | Survivors run faster across the narrow bridges. |
-| Lightning Likes You | Yellow circles warn of lightning aimed at players' previous positions. |
-| The Great Spinner | A rotating red arm sweeps around the arena. |
-| Greed Is Dangerous | Collect gold coins and avoid red trap coins. |
-| Red Light, Green Light | Move on green and freeze on red after a brief stopping grace. |
-| Special Delivery: Bombs | Delayed blasts target where survivors were standing. |
-| A Moment of Mercy | Supply crates restore health and award coins. |
-| Earthquake! | Platforms shake and tremors shove grounded survivors. |
-| Twister on the Loose | A moving purple tornado pulls nearby players toward it. |
-| The Cursed Crown | A marked survivor earns coins while losing health; contact passes the curse. |
-| Freeze Tag | A blue tagger briefly freezes and damages nearby survivors. |
-| Boing! | Outer islands become trampolines that launch players upward. |
-| Bridge Roulette | Half the bridges turn red and lose their collision after a warning. |
-| Laser Grid | Four neon fences pulse between safe blue and dangerous pink. |
+| One Knife. One Sheriff. | A random murderer receives a knife, a sheriff gets a blaster, and innocents hide or flee. Roles and personal instructions are sent only to their owner. The sheriff can damage only the murderer. Requires three players. |
+| A Duel of Bad Decisions | Two survivors receive swords; only their selected rival can be hit. |
+| Everyone Brought a Sword | Every survivor receives a sword. No teams. |
+| One Lucky Arsenal | A random survivor gets a blaster, knife and temporary extra health. Houses provide cover for everyone else. |
+| Free Blasters. Bad Idea. | Every survivor receives a blaster. Use walls for cover. |
 
-## UI, lobby, and progression
+Select a weapon in the Roblox backpack, **face an opponent and click or tap**. Guns aim in the character's facing direction. Server checks validate equipment, ownership, original avatar, alive status, cooldown, range, facing and line of sight. Weapons have a three-second grace period, cannot be dropped, never target lobby visitors, and disappear when their event ends or their owner leaves the round.
 
-The HUD uses cream cards, coral actions, teal accents, clear health and round timers, and event instructions. It adapts to desktop, portrait mobile, and landscape mobile screens. The map uses bright grass, pastel cottage roofs, warm daylight, soft sky haze, and restrained bloom.
+Major disasters include a volcano with arcing lava bombs and rising magma; an invading UFO with tractor beams and laser salvos; a kraken with telegraphed island slams; a blizzard with heat shelters; an asteroid that destroys marked islands; a flash flood with drifting rafts; and a singularity with green anchors and orbital debris. Green jump crates provide demanding high-ground routes during lava and flood events, without roof stairs.
 
-Use **SHOP / B**, **RANKS / L**, and **PLAYERS / P** to open the menus. The player roster groups living survivors separately from lobby visitors and spectators, with roles, wins, and presses. **WATCH / V** follows surviving players; press it again to cycle or stop. **Q** toggles the next-round queue while outside a round. **EMOTE** plays the equipped emote.
+The rest of the bank includes cops and robbers, rising lava, lasers, meteors, giant chicken and zombie chases, hot potato, musical and vanishing islands, shrinking islands, acid rain, tidal waves, shockwaves, slippery platforms, moon gravity, speed boosts, lightning, a spinner, trap tokens, red-light/green-light, falling bombs, supply drops, earthquakes, tornadoes, a cursed crown, freeze tag, trampolines, bridge roulette and a laser grid.
 
-The shop includes four button skins, two trails, two titles, two press sounds, two emotes, two pets, and 2x/3x coin upgrades. Purchases use earned Button Points. Items auto-equip after purchase; owned equipment can be equipped again free or removed. The highest owned coin multiplier applies to earned coins; multipliers do not stack.
+All event damage, pickups and PvP rewards are limited to current round participants. Event jobs, tools, effects, roles and temporary island changes are scoped and cleaned up on expiry or round end.
 
-The shared button shows the last presser's equipped skin. Player trails, titles, and current event roles appear on characters. Pets render locally for each player's equipped companion. Emotes use the standard Roblox avatar animation system; R15 is recommended. Sounds use Roblox's bundled audio.
+## Classic map, lobby and controls
 
-The **Hall of Survivors** menu and lobby board show the top **10 survival win totals** and refresh every **60 seconds**. Published servers use the global win leaderboard; Studio practice uses a session leaderboard. New global totals appear after a successful save and refresh. Roblox's built-in player list shows **Wins, Presses, Coins, Button Points, and Status**, with separate Lobby and Survivors teams.
+The map uses a classic Roblox style: native studded plastic surfaces, simple brick chimneys, bright flat daylight and rectangular SourceSans UI. These are Roblox's built-in surfaces and materials, rather than an externally downloaded historical texture pack. There is no bloom, neon scenery or heavy normal-day color grading. Disasters temporarily change the atmosphere, then restore normal daylight.
+
+Each 26-stud island holds a walk-in house with a 5.6-by-8 doorway, a 13.4-by-13.4 interior and 9.8 studs of headroom. Furniture stays against the walls, leaving the middle open for hiding and chases. There are no permanent roof stairs or roof decks. Lobby spawn pads remain invisible beneath the floor.
+
+The lobby includes a real ten-checkpoint obby. Reach its numbered pads in order and finish to earn **20 tokens**; the reward refreshes after **60 seconds**. The server checks character identity, position, checkpoint order and course timing. Joining a round or respawning resets the run. Missed jumps land on the lobby floor.
+
+Persistent HUD controls sit at the edges. **SHOP / B**, **RANKS / L**, and **PLAYERS / P** open menus; **Q** toggles queue while in the lobby. **WATCH / V** begins or ends spectating. The spectator bar has **previous / next / stop** controls; **[ / ]** cycle players. Spectating switches away from a dead target and restores your camera when you rejoin a round.
+
+## Tokens and usable supplies
+
+The old skins, trails, pets, titles, emotes, coin multipliers and Button Points shop have been removed. The only spendable currency is **Tokens**. Presses remain a lifetime statistic and give no tokens by themselves.
+
+- Competitive win: **60 tokens and one win**.
+- Solo survival with at least one event: **20 tokens**, without a competitive win.
+- Survive a complete event: **6 tokens**, plus pickups or event-specific rewards.
+- PvP knockout: **5 tokens**, credited once to the attacker.
+- Lobby obby completion: **20 tokens**, with a 60-second reward cooldown.
+
+Buy supplies in the lobby. You receive one tool for each stocked type at the start of a round; only activating a supply spends a unit. Unused stock stays saved. Each type holds at most five units.
+
+| Supply | Price | Use |
+| --- | ---: | --- |
+| Medkit | 30 tokens | Heal 35 HP. Using it at full health keeps it stocked. |
+| Bloxy Soda | 20 tokens | +6 movement speed for eight seconds. |
+| Jump Spring | 25 tokens | +15 jump power for eight seconds. |
+| Shield Capsule | 45 tokens | Block damage for five seconds. Falling still eliminates you. |
+
+Supplies require the owner's equipped tool and original living round avatar. Tools and temporary buffs clear on death or round end. Movement supplies retain their remaining duration across event transitions.
+
+## Audio
+
+The game immediately uses Roblox's bundled sounds for presses, warnings, disaster impacts, PvP weapons, role changes, supplies, checkpoint progress, purchases, knockouts and wins. An **SFX mute** button stops local audio. Small nearby camera accents are bounded and cleaned up safely.
+
+`assets/audio/` contains **17 original synthesized WAV effects** with no external samples or subscription requirement. They are optional replacements and **have not been uploaded to Roblox**. Import them, grant the experience permission and put their uploaded IDs in `AudioCatalog.luau`. See [the audio pack instructions](assets/audio/README.md) and [Roblox's audio asset guide](https://create.roblox.com/docs/audio/assets). `python scripts/generate_audio.py` regenerates the deterministic source pack.
 
 ## Saved progress and publishing
 
-Published servers use Roblox DataStores automatically. Coins, points, lifetime presses, survival wins, completed rounds, ownership, and equipment are saved every **45 seconds** and when players leave. Session leases protect profiles from concurrent server writes. An unavailable or busy profile load prevents play rather than replacing saved progress with defaults.
+Published servers save Tokens, inventory, wins, knockouts, presses and completed rounds every 45 seconds and when players leave. Session leases prevent concurrent writes. Existing version-one/two coin and point balances migrate once into Tokens; lifetime wins and presses are retained, while retired cosmetic ownership is removed. The existing profile store and global wins ranking remain in use.
 
-Existing version-one player profiles migrate to version two while retaining their coins, points, presses, ownership, and equipped items. New win and round counters start at zero. The existing `ButtonProfiles_v1` profile store and `ButtonPresses_v1` press totals are retained, while `ButtonWins_v1` stores the global survival win ranking.
+Studio defaults to disposable session progress. For save testing, use a separate published test experience, enable Studio API access and set `PersistenceInStudio = true`. See [Roblox's DataStore guide](https://create.roblox.com/docs/cloud-services/data-stores). Publish the built place through Studio when ready; pushing Git source does not publish the Roblox experience.
 
-Studio intentionally uses disposable practice progress and a session leaderboard by default. Purchases reset when Play ends. To test real saves, publish a **separate test experience**, enable **Game Settings → Security → Enable Studio Access to API Services**, and set `PersistenceInStudio = true` in `src/shared/Config.luau`. Studio can access the same stores as live servers, so use a separate test experience. See [Roblox's DataStore documentation](https://create.roblox.com/docs/cloud-services/data-stores).
+## Source and verification
 
-To release, open the built place and use **File → Publish to Roblox** in your account or group. No Roblox place ID, credentials, paid products, or third-party model permissions are needed to build or play locally. Publishing the Roblox experience is separate from pushing this source repository.
+`src/shared/` contains tuning, profiles, token economy and supply catalog; `src/server/` contains rounds, events, saves, world construction, supplies and the lobby obby; `src/client/` contains UI, spectating and audio feedback. Generated `build/` places and sourcemaps stay ignored.
 
-## Project layout
+Run `powershell -ExecutionPolicy Bypass -File scripts/test.ps1`. Four suites check production Luau compilation, native Roblox properties, economy migration and saving, button-only rounds, event cancellation, all 41 events, PvP validation, owner-only mystery state, responsive UI, results, spectating, supplies and obby rewards. GitHub Actions repeats the checks and uploads the complete built Studio place.
 
-```text
-default.project.json       Argon instance mapping and local connection
-rokit.toml                 Pinned Argon and Lune tools
-src/shared/                Tuning, shop catalog, save schema, economy, round/press rules
-src/server/                Round lifecycle, events, map, saves, character cosmetics
-src/client/                Responsive HUD, shop, ranks, roster, spectating, pets
-scripts/                   Build, serve, and test helpers
-tests/                     Automated Luau and Roblox property checks
-build/                     Generated Studio places (ignored by Git)
-```
+For a specific event preview during a Studio round, switch to **Server** and run `game.ServerScriptService.Server.StudioDisasterPreview:Fire("blaster_brawl")` in the Luau command bar using **Run / Ctrl+Enter**. Previews are restricted to Studio and still enforce each event's minimum players. Other IDs include `murder_mystery`, `free_swords`, `battle_kit`, `volcanic_eruption`, `ufo_invasion`, `kraken_attack`, `blizzard`, `meteor_apocalypse`, `flash_flood`, and `singularity`.
 
-Change round timing and rewards in `Config.luau`, shop products in `Catalog.luau`, event behavior in `Events.luau`, and map aesthetics in `World.luau`. No Wally installation is necessary.
-
-## Verification
-
-Run `powershell -ExecutionPolicy Bypass -File scripts/test.ps1`, or run both `lune run tests/run.luau` and `lune run tests/events.luau`. Automated checks compile production scripts, exercise rewards and purchases, sanitize and migrate saves, check round transitions, construct the world and responsive UI against Roblox property definitions, and run every event through a virtual clock. Event checks cover captures, escapes, bomb fuses, warning dodges, lobby isolation, cleanup, and cancellation. GitHub Actions runs the checks and uploads a built Studio place.
-
-Before release, use Studio's **Server & Clients** test with at least two players to check queue changes, simultaneous presses, role chases, hazard telegraphs, deaths, respawns, round outcomes, spectating, and touch/controller input. Character physics, avatar animations, networking, and live DataStore behavior require Studio or a published server. Offline checks do not establish that multiplayer playtesting has passed.
+Use Studio's **Server & Clients** with two players (three for murder mystery) to verify actual equipping, facing, weapon input, house collision, jumping, spectating and round results. Offline checks validate logic and Roblox properties, and do not replace native multiplayer or published DataStore testing.

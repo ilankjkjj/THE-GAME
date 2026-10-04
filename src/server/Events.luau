@@ -1,6 +1,7 @@
 -- Events own their visuals, jobs, roles and physics. The round controller
 -- always calls cleanup on expiry or round end. Only alive participants qualify.
 local Events = {}
+local Director = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared"):WaitForChild("DisasterDirector"))
 local random = Random.new()
 local RED = Color3.fromRGB(255, 86, 92)
 local GOLD = Color3.fromRGB(255, 210, 79)
@@ -53,9 +54,24 @@ local function newScope(c, name)
 		end
 	end
 	function s:restore(callback) table.insert(self.Restores, callback) end
+	function s:cue(kind, position, strength)
+		if not self:active() or not c.Cue then return end
+		local now = os.clock()
+		-- Crowd impacts share a small budget; rendering and sound stay client-side.
+		if now < (self.NextCue or 0) then return end
+		self.NextCue = now + 0.22
+		c.Cue(kind, position, strength or 1)
+	end
+	function s:phase(text, hint, kind, stage)
+		if not self:active() then return end
+		if c.SetStage then c.SetStage(stage or "Active", hint or text) end
+		toast(c, text, "event")
+		for _, player in ipairs(self:players()) do self:hint(player, hint or text) end
+		self:cue(kind or "warning", Vector3.new(0, TOP, 0), 1)
+	end
 	function s:hint(player, text)
 		if not player.Parent then return end
-		player:SetAttribute("EventHint", text)
+		if c.SetHint then c.SetHint(player, text) else player:SetAttribute("EventHint", text) end
 		self.Hints[player] = text
 	end
 	function s:spawn(callback)
@@ -137,6 +153,7 @@ local function newScope(c, name)
 		self:resource(player, character, function()
 			if player.Character == character and humanoid.Parent then
 				for property, value in pairs(previous) do humanoid[property] = value end
+				if previous.MaxHealth then humanoid.Health = math.min(humanoid.Health, humanoid.MaxHealth) end
 			end
 		end)
 	end
@@ -146,15 +163,20 @@ local function newScope(c, name)
 		for _, job in ipairs(self.Jobs) do
 			if task.cancel and job ~= coroutine.running() and coroutine.status(job) ~= "dead" then pcall(task.cancel, job) end
 		end
-		for index = #self.Restores, 1, -1 do self.Restores[index]() end
 		for instance, properties in pairs(self.Saved) do
 			if instance.Parent then for property, value in pairs(properties) do instance[property] = value[1] end end
 		end
+		-- Theme restoration runs after temporary surface mutations, so a saved
+		-- snow/alien palette cannot overwrite the restored daylight colors.
+		for index = #self.Restores, 1, -1 do self.Restores[index]() end
 		for player, role in pairs(self.Roles) do
 			if player.Character == role.Character and (not c.Active or c.Active()) and c.IsAlive(player) then c.SetRole(player, nil) end
 		end
 		for player, text in pairs(self.Hints) do
-			if player.Parent and player:GetAttribute("EventHint") == text then player:SetAttribute("EventHint", nil) end
+			if player.Parent then
+				if c.SetHint then c.SetHint(player, nil)
+				elseif player:GetAttribute("EventHint") == text then player:SetAttribute("EventHint", nil) end
+			end
 		end
 		self.Container:Destroy()
 	end
@@ -175,7 +197,10 @@ local function marker(s, position, radius, color, name)
 end
 local function label(s, part, text, color)
 	local gui = Instance.new("BillboardGui")
-	gui.Size = UDim2.fromOffset(190, 45)
+	-- Billboard scale components use studs: text recedes with its island
+	-- instead of retaining a large pixel size across the entire arena.
+	gui.Size = UDim2.fromScale(8, 1.8)
+	gui.MaxDistance = 65
 	gui.StudsOffset = Vector3.new(0, 5, 0)
 	gui.AlwaysOnTop = true
 	gui.Adornee = part
@@ -189,6 +214,9 @@ local function label(s, part, text, color)
 	textLabel.TextScaled = true
 	textLabel.Text = text
 	textLabel.Parent = gui
+	local sizeLimit = Instance.new("UITextSizeConstraint")
+	sizeLimit.MinTextSize, sizeLimit.MaxTextSize = 8, 22
+	sizeLimit.Parent = textLabel
 	return textLabel
 end
 local function nearest(s, position, exclude)
@@ -201,6 +229,78 @@ local function nearest(s, position, exclude)
 		end
 	end
 	return found, rootFound, best
+end
+local function emitter(part, color, rate, speed, size, lifetime, direction)
+	local particles = Instance.new("ParticleEmitter")
+	particles.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+	particles.Color = ColorSequence.new(color)
+	particles.LightEmission = 0.65
+	particles.Rate = rate
+	particles.Speed = NumberRange.new(speed * 0.6, speed)
+	particles.Lifetime = NumberRange.new(lifetime * 0.75, lifetime)
+	particles.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, size), NumberSequenceKeypoint.new(1, 0) })
+	particles.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.1), NumberSequenceKeypoint.new(1, 1) })
+	particles.SpreadAngle = Vector2.new(25, 25)
+	particles.EmissionDirection = direction or Enum.NormalId.Top
+	particles.Parent = part
+	return particles
+end
+local function glow(part, color, brightness, range)
+	local light = Instance.new("PointLight")
+	light.Color, light.Brightness, light.Range = color, brightness or 1.5, range or 18
+	light.Parent = part
+	return light
+end
+local function beamPart(s, name, a, b, width, color, material)
+	local part = s:part(name, Vector3.new(width, width, (b - a).Magnitude), (a + b) / 2, color, material or Enum.Material.Neon)
+	part.CFrame = CFrame.lookAt((a + b) / 2, b)
+	return part
+end
+local function impact(s, position, radius, color, kind)
+	local group = Instance.new("Folder")
+	group.Name = "ImpactBurst"
+	group.Parent = s.Container
+	local orb = s:part("ImpactFlash", Vector3.new(radius, radius, radius), position, color, Enum.Material.Neon, Enum.PartType.Ball)
+	orb.Parent = group
+	orb.Transparency = 0.3
+	emitter(orb, color, 36, 23, 1.2, 0.5)
+	glow(orb, color, 3, radius * 4)
+	local debris = {}
+	for index = 1, 6 do
+		local angle = index * math.pi / 3
+		local chunk = s:part("ImpactShard", Vector3.new(1.4, 1.4, 1.4), position, color, Enum.Material.Neon)
+		chunk.Parent = group
+		table.insert(debris, { Part = chunk, Direction = Vector3.new(math.cos(angle), 0, math.sin(angle)) })
+	end
+	s:cue(kind or "impact", position, math.min(2, radius / 6))
+	s:spawn(function()
+		for frame = 1, 5 do
+			if not s:wait(0.12) then return end
+			orb.Size = Vector3.new(1, 1, 1) * (radius + frame * 2)
+			orb.Transparency = 0.3 + frame * 0.12
+			for _, chunk in ipairs(debris) do
+				chunk.Part.Position = position + chunk.Direction * frame * 2 + Vector3.new(0, 3 + frame - frame * frame * 0.24, 0)
+				chunk.Part.CFrame *= CFrame.Angles(0.5, 0.4, 0.3)
+			end
+		end
+		group:Destroy()
+	end)
+end
+local function escapeCrates(s, position, color)
+	-- Three separated jump platforms require deliberate jumps. No staircase
+	-- or floor-to-roof solid columns appear inside an occupied cottage.
+	local crate
+	for level = 1, 3 do
+		crate = s:part("EscapeCrate", Vector3.new(4.5, 3, 4.5), Vector3.new(position.X - 10, TOP + level * 3 - 1.5, position.Z - 10 + (level - 1) * 5), color, Enum.Material.WoodPlanks, nil, true)
+	end
+	label(s, crate, "JUMP TO SAFETY", color)
+	return crate
+end
+local function hideBridge(s, bridge)
+	s:save(bridge, { CanCollide = false, Transparency = 0.94 })
+	for _, descendant in ipairs(bridge:GetDescendants()) do
+		if descendant:IsA("BasePart") then s:save(descendant, { CanCollide = false, Transparency = 0.94 }) end
+	end
 end
 local function setPosition(pieces, position, angle)
 	local cf = CFrame.new(position) * CFrame.Angles(0, angle or 0, 0)
@@ -223,7 +323,10 @@ local function npc(s, kind, position)
 			piece("ChickenEye", Vector3.new(0.5, 0.5, 0.5), Vector3.new(sign * 1.3, 8.7, -2.7), Color3.fromRGB(40, 36, 52), Enum.PartType.Ball)
 			piece("ChickenWing", Vector3.new(1.8, 3, 4), Vector3.new(sign * 3, 4.8, 0), Color3.fromRGB(255, 224, 153), Enum.PartType.Ball)
 			piece("ChickenFoot", Vector3.new(2, 0.5, 3), Vector3.new(sign * 1.5, 0.3, -1), GOLD)
+			piece("ChickenPupil", Vector3.new(0.24, 0.3, 0.2), Vector3.new(sign * 1.3, 8.7, -3), Color3.new(0, 0, 0), Enum.PartType.Ball)
+			piece("ChickenWattle", Vector3.new(0.9, 1.2, 0.7), Vector3.new(sign * 0.4, 7.1, -2.8), RED, Enum.PartType.Ball)
 		end
+		for index = 1, 3 do piece("TailFeather", Vector3.new(1.2, 3.5, 1.3), Vector3.new((index - 2) * 1.1, 5.8, 3), Color3.fromRGB(255, 222, 159), Enum.PartType.Ball) end
 	else
 		body = piece("ZombieTorso", Vector3.new(2.8, 3.8, 1.8), Vector3.new(0, 3.5, 0), PURPLE)
 		piece("ZombieHead", Vector3.new(2.2, 2.2, 2.2), Vector3.new(0, 6.5, 0), GREEN)
@@ -231,16 +334,22 @@ local function npc(s, kind, position)
 			piece("ZombieArm", Vector3.new(1, 3, 1), Vector3.new(sign * 2, 3.5, -1.2), GREEN)
 			piece("ZombieLeg", Vector3.new(1.1, 2.3, 1.2), Vector3.new(sign * 0.8, 1.2, 0), Color3.fromRGB(73, 89, 149))
 			piece("ZombieEye", Vector3.new(0.4, 0.4, 0.3), Vector3.new(sign * 0.5, 6.7, -1.15), RED)
+			piece("ZombieShoe", Vector3.new(1.4, 0.5, 2), Vector3.new(sign * 0.8, 0.3, -0.4), Color3.fromRGB(38, 45, 73))
 		end
+		piece("ZombieMouth", Vector3.new(1, 0.4, 0.15), Vector3.new(0, 6, -1.15), Color3.fromRGB(35, 49, 57))
+		piece("ZombieBrow", Vector3.new(1.8, 0.2, 0.2), Vector3.new(0, 7.05, -1.15), Color3.fromRGB(29, 92, 55))
 	end
+	emitter(body, kind == "chicken" and GOLD or GREEN, 9, 3, 0.35, 0.6)
 	label(s, body, kind == "chicken" and "RUN. IT'S HUNGRY." or "BRAAAINS!", kind == "chicken" and GOLD or GREEN)
 	return pieces
 end
 local function chase(s, kind, position, speed)
 	local pieces = npc(s, kind, position)
+	local nextRoar = 4
 	s:loop(function(elapsed)
 		local _, target, distance = nearest(s, position)
 		if not target or elapsed < 3 then return end
+		if elapsed >= nextRoar then nextRoar = elapsed + 5; s:cue("chase", position, 0.65) end
 		local direction = Vector3.new(target.Position.X - position.X, 0, target.Position.Z - position.Z)
 		if direction.Magnitude > 0.2 then
 			direction = direction.Unit
@@ -257,8 +366,24 @@ local function strike(s, position, radius, damage, kind)
 	local warning = marker(s, position, radius, kind == "lightning" and GOLD or RED, "Incoming" .. kind)
 	label(s, warning, kind == "lightning" and "LIGHTNING! MOVE!" or "INCOMING! MOVE!", kind == "lightning" and GOLD or RED)
 	s:spawn(function()
-		if not s:wait(2.2) then return end
+		local falling
+		if kind ~= "lightning" then
+			falling = s:part(kind == "meteor" and "FallingMeteor" or (kind == "magma" and "LavaBomb" or "FallingBomb"), Vector3.new(4, 4, 4), Vector3.new(position.X - 24, TOP + 62, position.Z - 12), Color3.fromRGB(73, 57, 65), Enum.Material.Slate, Enum.PartType.Ball)
+			emitter(falling, kind == "meteor" and Color3.fromRGB(255, 153, 50) or RED, 25, 10, 1.5, 0.5)
+			glow(falling, RED, 2.5, 20)
+		end
+		for frame = 1, 11 do
+			if not s:wait(0.2) then return end
+			warning.Transparency = frame % 2 == 0 and 0.55 or 0.18
+			if falling then
+				local alpha = frame / 11
+				local start = kind == "magma" and Vector3.new(-105, TOP + 30, 0) or Vector3.new(position.X - 24, TOP + 62, position.Z - 12)
+				falling.Position = start:Lerp(Vector3.new(position.X, TOP + 3, position.Z), alpha) + Vector3.new(0, kind == "magma" and math.sin(alpha * math.pi) * 26 or 0, 0)
+				falling.CFrame *= CFrame.Angles(0.3, 0.2, 0.4)
+			end
+		end
 		warning:Destroy()
+		if falling then falling:Destroy() end
 		local effect
 		if kind == "lightning" then
 			effect = s:part("LightningBolt", Vector3.new(0.8, 60, 0.8), Vector3.new(position.X, TOP + 30, position.Z), GOLD, Enum.Material.Neon)
@@ -266,7 +391,9 @@ local function strike(s, position, radius, damage, kind)
 			effect = s:part(kind == "meteor" and "Meteor" or "BombBlast", Vector3.new(radius * 2, radius * 2, radius * 2), Vector3.new(position.X, TOP + 3, position.Z), kind == "meteor" and Color3.fromRGB(255, 130, 64) or RED, Enum.Material.Neon, Enum.PartType.Ball)
 			effect.Transparency = 0.25
 		end
-		s:area(Vector3.new(position.X, TOP + 4, position.Z), radius, damage, 14, kind)
+		s:area(Vector3.new(position.X, TOP + 4, position.Z), radius, damage, kind == "magma" and 8 or 14, kind)
+		if not s:active() then return end
+		impact(s, Vector3.new(position.X, TOP + 3, position.Z), radius, kind == "lightning" and GOLD or RED, kind == "lightning" and "storm" or (kind == "magma" and "eruption" or "impact"))
 		if s:wait(0.5) then effect:Destroy() end
 	end)
 end
@@ -285,14 +412,144 @@ local function shower(s, color)
 	particles.Parent = emitterPart
 end
 
+local function weapon(s, owner, spec)
+	local character = s:character(owner)
+	if not character then return function() end end
+	local tool = Instance.new("Tool")
+	tool.Name = spec.Name
+	tool.RequiresHandle = true
+	tool.CanBeDropped = false
+	tool.ToolTip = spec.Gun and "Equip. Face a survivor, then click / tap to fire." or "Equip. Face a nearby survivor, then click / tap to swing."
+	tool:SetAttribute("EventWeapon", true)
+	tool:SetAttribute("OwnerUserId", owner.UserId)
+	tool:SetAttribute("WeaponKind", spec.Gun and "Blaster" or "Blade")
+	tool:SetAttribute("Damage", spec.Damage)
+	local handle = Instance.new("Part")
+	handle.Name = "Handle"
+	handle.Size = spec.Gun and Vector3.new(0.6, 1.2, 0.7) or Vector3.new(0.45, 1.25, 0.45)
+	handle.Color = Color3.fromRGB(64, 72, 89)
+	handle.Material = Enum.Material.Metal
+	handle.Massless, handle.CanCollide, handle.CanTouch, handle.CanQuery = true, false, false, false
+	handle.Parent = tool
+	local function decoration(name, size, offset, color)
+		local part = Instance.new("Part")
+		part.Name, part.Size, part.Color = name, size, color
+		part.Material = Enum.Material.Neon
+		part.CFrame = handle.CFrame * CFrame.new(offset)
+		part.Massless, part.CanCollide, part.CanTouch, part.CanQuery = true, false, false, false
+		part.Parent = tool
+		local weld = Instance.new("WeldConstraint")
+		weld.Part0, weld.Part1, weld.Parent = handle, part, part
+	end
+	if spec.Gun then
+		decoration("BlasterBody", Vector3.new(1, 0.85, 2.4), Vector3.new(0, 0.5, -0.8), spec.Color)
+		decoration("BlasterBarrel", Vector3.new(0.45, 0.45, 1.1), Vector3.new(0, 0.5, -2.2), GOLD)
+		tool.Grip = CFrame.new(0, -0.2, -0.6)
+	else
+		local length = spec.Knife and 1.9 or 4
+		decoration("Blade", Vector3.new(0.55, length, 0.25), Vector3.new(0, length / 2 + 0.65, 0), spec.Color)
+		decoration("BladeGuard", Vector3.new(1.7, 0.3, 0.45), Vector3.new(0, 0.6, 0), GOLD)
+	end
+	local backpack = owner:FindFirstChildOfClass("Backpack")
+	tool.Parent = backpack or character
+	local readyAt, nextAttack, released = os.clock() + 3, 0, false
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { character, s.Container }
+	params.IgnoreWater = true
+	local activation
+	activation = tool.Activated:Connect(function()
+		-- Equip state, lifetime, identity, aim, range, cooldown and obstruction
+		-- are checked on the server. No damage or target comes from the client.
+		if released or not s:active() or tool.Parent ~= owner.Character or owner.Character ~= character or os.clock() < readyAt or os.clock() < nextAttack then return end
+		local _, _, root = s:character(owner)
+		if not root then return end
+		nextAttack = os.clock() + spec.Cooldown
+		local origin, direction = root.Position + Vector3.new(0, 0.7, 0), root.CFrame.LookVector
+		local chosen, chosenRoot, best = nil, nil, spec.Range + 1
+		for _, target in ipairs(s:players()) do
+			local _, _, targetRoot = s:character(target)
+			if target ~= owner and targetRoot and (not spec.Target or spec.Target(target)) then
+				local delta = targetRoot.Position + Vector3.new(0, 0.7, 0) - origin
+				local distance = delta.Magnitude
+				local along = delta:Dot(direction)
+				local sideways = (delta - direction * along).Magnitude
+				local aimed = spec.Gun and sideways <= 2.8 or (not spec.Gun and along >= distance * 0.35)
+				if distance > 0.1 and distance <= spec.Range and along > 0 and aimed and distance < best then
+					chosen, chosenRoot, best = target, targetRoot, distance
+				end
+			end
+		end
+		local endpoint = origin + direction * spec.Range
+		if chosenRoot then
+			local targetPoint = chosenRoot.Position + Vector3.new(0, 0.7, 0)
+			local obstruction = workspace:Raycast(origin, targetPoint - origin, params)
+			if obstruction and not obstruction.Instance:IsDescendantOf(chosen.Character) then
+				chosen, chosenRoot, endpoint = nil, nil, obstruction.Position
+			else endpoint = targetPoint end
+		else
+			local obstruction = workspace:Raycast(origin, direction * spec.Range, params)
+			if obstruction then endpoint = obstruction.Position end
+		end
+		local visual = beamPart(s, spec.Gun and "BlasterShot" or "SwordSlash", origin, endpoint, spec.Gun and 0.35 or 0.6, spec.Color)
+		s:cue(spec.Gun and "gunshot" or "sword", origin, 0.45)
+		s:spawn(function() if s:wait(0.18) then visual:Destroy() end end)
+		if chosen and s:character(chosen) then
+			s.Context.Damage(chosen, spec.Damage, owner)
+			if s:active() and spec.OnHit then spec.OnHit(chosen) end
+		end
+	end)
+	local release = s:resource(owner, character, function()
+		released = true
+		if activation then activation:Disconnect() end
+		tool:Destroy()
+	end)
+	return release
+end
+
 local definitions = {}
+local disasterIds = {
+	rising_lava = true, meteor_shower = true, zombie_outbreak = true, acid_rain = true,
+	tidal_wave = true, lightning_storm = true, falling_bombs = true, earthquake = true,
+	tornado = true, volcanic_eruption = true, ufo_invasion = true, kraken_attack = true,
+	blizzard = true, meteor_apocalypse = true, flash_flood = true, singularity = true,
+}
+local reliefIds = { supply_drop = true, moon_gravity = true, speed_frenzy = true, rocket_jump = true }
+local pvpIds = { murder_mystery = true, sword_duel = true, free_swords = true, battle_kit = true, blaster_brawl = true }
+local cues = {
+	rising_lava = "eruption", volcanic_eruption = "eruption", meteor_shower = "impact", meteor_apocalypse = "impact",
+	acid_rain = "storm", tidal_wave = "storm", lightning_storm = "storm", earthquake = "impact", tornado = "storm",
+	blizzard = "storm", flash_flood = "storm", kraken_attack = "storm", ufo_invasion = "sciFi", singularity = "sciFi",
+	chicken_chase = "chase", zombie_outbreak = "chase", cops_robbers = "chase", freeze_tag = "chase",
+	murder_mystery = "role", sword_duel = "sword", free_swords = "sword", battle_kit = "supply", blaster_brawl = "gunshot",
+}
+local themes = {
+	rising_lava = "Inferno", volcanic_eruption = "Eruption", meteor_apocalypse = "Eruption",
+	acid_rain = "Storm", tidal_wave = "Storm", lightning_storm = "Storm", tornado = "Storm",
+	kraken_attack = "Storm", flash_flood = "Storm", blizzard = "Blizzard",
+	ufo_invasion = "Alien", singularity = "Alien",
+}
+local stagedIds = {
+	volcanic_eruption = true, ufo_invasion = true, kraken_attack = true,
+	blizzard = true, meteor_apocalypse = true, flash_flood = true, singularity = true,
+}
 local function add(id, name, description, duration, callback, minimum, weight)
 	table.insert(definitions, {
 		Id = id, Name = name, Description = description, Duration = duration,
 		MinPlayers = minimum or 1, Weight = weight or 1,
+		Category = pvpIds[id] and "PvP" or (disasterIds[id] and "Disaster" or (reliefIds[id] and "Relief" or "Challenge")),
+		Intensity = duration > 20 and 3 or (reliefIds[id] and 1 or 2),
+		Cue = cues[id] or (reliefIds[id] and "relief" or "warning"),
 		Run = function(context, presser)
 			local scope = newScope(context, name)
-			local ok, err = pcall(callback, scope, context, presser)
+			local ok, err = pcall(function()
+				if themes[id] and context.World.theme then
+					scope:restore(function() context.World.theme("Normal") end)
+					context.World.theme(themes[id])
+				end
+				callback(scope, context, presser)
+				if not stagedIds[id] and context.SetStage and scope:active() then context.SetStage("Active", description) end
+			end)
 			if not ok then scope:close(); error(err) end
 			return function() scope:close() end
 		end,
@@ -325,25 +582,27 @@ add("cops_robbers", "COPS & ROBBERS", "Blue cop: catch the red robber. Robber: s
 		elseif elapsed >= 19 then
 			finished = true
 			c.Award(robber, 35, 5)
-			toast(c, robber.DisplayName .. " escaped! +35 coins.", "good")
+			toast(c, robber.DisplayName .. " escaped! +35 tokens.", "good")
 		end
 	end)
 end, 2, 1.3)
 
-add("rising_lava", "THE LAVA IS RISING", "Climb the bright emergency stairs or a cottage roof. Low ground burns after the warning.", 18, function(s)
+add("rising_lava", "THE LAVA IS RISING", "Jump between the green escape crates. Low ground burns once the magma reaches the islands.", 18, function(s)
 	local lava = s:part("RisingLava", Vector3.new(156, 2, 156), Vector3.new(0, 13, 0), Color3.fromRGB(255, 104, 47), Enum.Material.Neon)
 	lava.Transparency = 0.12
-	for _, platform in ipairs(s.Context.World.Platforms) do
-		local position = platform.Position
-		for step = 1, 4 do
-			local height = step * 2.5
-			s:part("EmergencyStair", Vector3.new(3.5, height, 5), Vector3.new(position.X - 7 + (step - 1) * 3.4, TOP + height / 2, position.Z + 5), GOLD, Enum.Material.SmoothPlastic, nil, true)
-		end
+	emitter(lava, GOLD, 45, 9, 1, 1.1)
+	local bubbles = {}
+	for index = 1, 12 do
+		local angle = index * math.pi / 6
+		local bubble = s:part("LavaBubble", Vector3.new(5, 3, 5), Vector3.new(math.cos(angle) * 42, 13, math.sin(angle) * 42), GOLD, Enum.Material.Neon, Enum.PartType.Ball)
+		table.insert(bubbles, bubble)
 	end
+	for _, platform in ipairs(s.Context.World.Platforms) do escapeCrates(s, platform.Position, GREEN) end
 	s:loop(function(elapsed)
 		if elapsed < 4 then return end
 		local level = math.min(35.5, 16 + (elapsed - 4) * 2.1)
 		lava.Position = Vector3.new(0, level - 1, 0)
+		for index, bubble in ipairs(bubbles) do bubble.Position = Vector3.new(bubble.Position.X, level - 0.2 + math.sin(elapsed * 3 + index) * 0.7, bubble.Position.Z) end
 		for _, player in ipairs(s:players()) do
 			local _, _, root = s:character(player)
 			if root and root.Position.Y < level + 2 then s:hit(player, 18, 1, "lava") end
@@ -450,7 +709,9 @@ add("musical_islands", "MUSICAL ISLANDS", "Get onto a GREEN island before the mu
 		local platforms = shuffled(s.Context.World.Platforms)
 		for index = 1, math.min(4, #platforms) do
 			table.insert(safe, platforms[index].Position)
-			table.insert(markers, marker(s, platforms[index].Position, 8, GREEN, "SafeIsland"))
+			local safeMarker = marker(s, platforms[index].Position, 8, GREEN, "SafeIsland")
+			label(s, safeMarker, "SAFE ISLAND: GET HERE!", GREEN)
+			table.insert(markers, safeMarker)
 		end
 	end
 	choose()
@@ -490,7 +751,7 @@ add("vanishing_islands", "NOW YOU SEE IT...", "Flashing red islands and their br
 			end
 			local islandIndex = table.find(c.World.Platforms, platform)
 			local bridge = c.World.Bridges and c.World.Bridges[islandIndex]
-			if bridge then s:save(bridge, { CanCollide = false, Transparency = 0.88 }) end
+			if bridge then hideBridge(s, bridge) end
 		end
 	end)
 end)
@@ -532,10 +793,17 @@ end)
 add("tidal_wave", "TIDAL TROUBLE", "A huge blue wave is coming. Climb a roof or jump high to dodge it.", 16, function(s)
 	local wave = s:part("TidalWave", Vector3.new(7, 11, 155), Vector3.new(-79, TOP + 4, 0), BLUE, Enum.Material.Neon)
 	wave.Transparency = 0.35
+	emitter(wave, Color3.fromRGB(219, 251, 255), 55, 14, 0.7, 0.8)
+	local foam = {}
+	for index = 1, 13 do
+		local part = s:part("WaveCrest", Vector3.new(8, 3.5, 14), Vector3.new(-79, TOP + 10, -78 + index * 12), Color3.fromRGB(233, 253, 255), Enum.Material.SmoothPlastic, Enum.PartType.Ball)
+		table.insert(foam, part)
+	end
 	s:loop(function(elapsed)
 		if elapsed < 4 then return end
 		local x = -79 + (elapsed - 4) * 15
 		wave.Position = Vector3.new(x, TOP + 4, 0)
+		for index, part in ipairs(foam) do part.Position = Vector3.new(x - 1 + math.sin(elapsed * 3 + index), TOP + 9.5, part.Position.Z) end
 		for _, player in ipairs(s:players()) do
 			local _, _, root = s:character(player)
 			if root and math.abs(root.Position.X - x) < 5 and root.Position.Y < TOP + 11 then s:hit(player, 35, 2, "wave"); if s:active() then root.AssemblyLinearVelocity = Vector3.new(22, 35, 0) end end
@@ -628,18 +896,18 @@ add("spinner", "THE GREAT SPINNER", "A red arm circles the arena at ankle height
 	end)
 end)
 
-add("greedy_gold", "GREED IS DANGEROUS", "Gold coins are worth ten each. Red coins are traps. Collect carefully!", 16, function(s, c)
-	local coins = {}
+add("greedy_gold", "GREED IS DANGEROUS", "Gold tokens are worth ten each. Red tokens are traps. Collect carefully!", 16, function(s, c)
+	local tokens = {}
 	for index = 1, 30 do
 		local platform = c.World.Platforms[(index - 1) % #c.World.Platforms + 1]
 		local fake = index % 4 == 0
 		local position = Vector3.new(platform.Position.X + random:NextNumber(-7, 7), TOP + 2.5, platform.Position.Z + random:NextNumber(-7, 7))
 		local coin = s:part(fake and "TrapCoin" or "RewardCoin", Vector3.new(0.4, 1.8, 1.8), position, fake and RED or GOLD, Enum.Material.Neon, Enum.PartType.Cylinder)
 		coin.Orientation = Vector3.new(0, 0, 90)
-		table.insert(coins, { Part = coin, Fake = fake, Base = position, Collected = false })
+		table.insert(tokens, { Part = coin, Fake = fake, Base = position, Collected = false })
 	end
 	s:loop(function(elapsed)
-		for _, coin in ipairs(coins) do
+		for _, coin in ipairs(tokens) do
 			if coin.Collected then continue end
 			coin.Part.Position = coin.Base + Vector3.new(0, math.sin(elapsed * 3) * 0.5, 0)
 			for _, player in ipairs(s:players()) do
@@ -692,13 +960,13 @@ add("falling_bombs", "SPECIAL DELIVERY: BOMBS", "Bombs target where you were sta
 	end)
 end)
 
-add("supply_drop", "A MOMENT OF MERCY", "Grab a glowing supply crate for healing and coins. First come, first saved.", 12, function(s, c)
+add("supply_drop", "A MOMENT OF MERCY", "Grab a glowing supply crate for healing and tokens. First come, first saved.", 12, function(s, c)
 	local crates = {}
 	local platforms = shuffled(c.World.Platforms)
 	for index = 1, math.min(6, #platforms) do
 		local position = platforms[index].Position
 		local crate = s:part("SupplyCrate", Vector3.new(3, 3, 3), Vector3.new(position.X, TOP + 2, position.Z), GREEN, Enum.Material.SmoothPlastic)
-		label(s, crate, "+35 HP / +15 COINS", GREEN)
+		label(s, crate, "+35 HP / +15 TOKENS", GREEN)
 		table.insert(crates, { Part = crate, Collected = false })
 	end
 	s:loop(function()
@@ -746,10 +1014,24 @@ add("tornado", "TWISTER ON THE LOOSE", "A roaming tornado pulls nearby survivors
 		disc.Transparency = 0.55
 		table.insert(discs, disc)
 	end
+	local stormCloud = s:part("TornadoStormCloud", Vector3.new(28, 11, 28), Vector3.new(0, TOP + 23, 0), Color3.fromRGB(92, 98, 122), Enum.Material.SmoothPlastic, Enum.PartType.Ball)
+	emitter(stormCloud, Color3.fromRGB(205, 214, 234), 38, 20, 0.7, 0.65, Enum.NormalId.Bottom)
+	local debris = {}
+	for index = 1, 14 do
+		local shard = s:part("TwisterDebris", Vector3.new(1.8, 0.5, 2.6), Vector3.new(0, 45, 0), index % 2 == 0 and Color3.fromRGB(142, 109, 82) or Color3.fromRGB(180, 199, 172), Enum.Material.WoodPlanks)
+		table.insert(debris, shard)
+	end
+	local lastGust = 0
 	s:loop(function(elapsed)
 		local position = Vector3.new(math.cos(elapsed * 0.48) * 46, TOP, math.sin(elapsed * 0.48) * 46)
+		stormCloud.Position = position + Vector3.new(0, 23, 0)
+		for index, shard in ipairs(debris) do
+			local angle, height = elapsed * (3 + index % 3) + index, 3 + index * 1.1
+			shard.CFrame = CFrame.new(position + Vector3.new(math.cos(angle) * (4 + height * 0.33), height, math.sin(angle) * (4 + height * 0.33))) * CFrame.Angles(elapsed * 2, angle, 0.5)
+		end
 		for index, disc in ipairs(discs) do disc.Position = position + Vector3.new(math.sin(elapsed * 5 + index), index * 2, math.cos(elapsed * 5 + index)) end
 		if elapsed < 4 then return end
+		if elapsed - lastGust > 5 then lastGust = elapsed; s:cue("storm", position, 0.9) end
 		for _, player in ipairs(s:players()) do
 			local _, _, root = s:character(player)
 			if root then
@@ -763,7 +1045,7 @@ add("tornado", "TWISTER ON THE LOOSE", "A roaming tornado pulls nearby survivors
 	end)
 end)
 
-add("cursed_crown", "THE CURSED CROWN", "The crowned survivor earns coins while marked. Tag another player to pass the draining curse.", 18, function(s, c)
+add("cursed_crown", "THE CURSED CROWN", "The crowned survivor earns tokens while marked. Tag another player to pass the draining curse.", 18, function(s, c)
 	local players = s:players()
 	if #players < 2 then return end
 	local holder = players[random:NextInteger(1, #players)]
@@ -865,7 +1147,7 @@ add("bridge_roulette", "BRIDGE ROULETTE", "Half the bridges turn RED, then vanis
 	for index = 1, count do s:save(bridges[index], { Color = RED, Material = Enum.Material.Neon }) end
 	s:spawn(function()
 		if not s:wait(4) then return end
-		for index = 1, count do s:save(bridges[index], { CanCollide = false, Transparency = 0.9 }) end
+		for index = 1, count do hideBridge(s, bridges[index]) end
 	end)
 end)
 
@@ -887,20 +1169,478 @@ add("laser_grid", "LASER GRID", "Four neon fences pulse on and off. Cross while 
 	end)
 end)
 
-Events.Definitions = definitions
-function Events.choose(aliveCount, previousId, threatLevel)
-	local eligible, total = {}, 0
-	for _, definition in ipairs(definitions) do
-		if (aliveCount or 1) >= definition.MinPlayers and definition.Id ~= previousId then
-			local weight = definition.Weight
-			if definition.Weight < 1 then weight /= 1 + math.max(0, (threatLevel or 1) - 1) * 0.16 end
-			total += weight
-			table.insert(eligible, { Definition = definition, Weight = weight })
+add("volcanic_eruption", "VOLCANO: JUMP FOR YOUR LIFE", "Jump up the GREEN crates, then dodge lava-bomb circles from high ground. Magma punishes missed jumps.", 28, function(s, c)
+	local volcanic = Color3.fromRGB(84, 62, 67)
+	for index = 1, 12 do
+		local diameter = 49 - index * 2.8
+		local layer = s:part("VolcanoCrag", Vector3.new(3.7, diameter, diameter), Vector3.new(-105, 1 + index * 3.4, 0), volcanic, Enum.Material.Slate, Enum.PartType.Cylinder)
+		layer.Orientation = Vector3.new(0, 0, 90)
+	end
+	local crater = s:part("VolcanoCrater", Vector3.new(1.4, 15, 15), Vector3.new(-105, 43, 0), Color3.fromRGB(255, 139, 54), Enum.Material.Neon, Enum.PartType.Cylinder)
+	crater.Orientation = Vector3.new(0, 0, 90)
+	emitter(crater, GOLD, 30, 25, 2.2, 1.2)
+	glow(crater, RED, 3, 40)
+	local plume = s:part("AshPlume", Vector3.new(20, 8, 20), Vector3.new(-105, 61, 0), Color3.fromRGB(88, 79, 89), Enum.Material.SmoothPlastic, Enum.PartType.Ball)
+	plume.Transparency = 0.4
+	emitter(plume, Color3.fromRGB(144, 136, 140), 35, 12, 2.5, 2)
+	for _, platform in ipairs(c.World.Platforms) do escapeCrates(s, platform.Position, GREEN) end
+	local lava = s:part("VolcanicMagma", Vector3.new(158, 2, 158), Vector3.new(0, 14, 0), Color3.fromRGB(255, 113, 46), Enum.Material.Neon)
+	lava.Transparency = 0.2
+	emitter(lava, GOLD, 45, 9, 0.8, 1)
+	s:phase("THE VOLCANO IS WAKING UP!", "Jump up the GREEN crates. Keep clear of bomb circles.", "eruption", "Warning")
+	s:spawn(function()
+		if not s:wait(5) then return end
+		s:phase("ERUPTION! Lava bombs incoming!", "Dodge the circles. Prepare for rising magma.", "eruption", "Active")
+		for wave = 1, 5 do
+			local platforms = shuffled(c.World.Platforms)
+			for index = 1, 3 do strike(s, platforms[index].Position, 7.5, 32, "magma") end
+			if not s:wait(3.5) then return end
+		end
+	end)
+	local finale = false
+	s:loop(function(elapsed)
+		plume.Position = Vector3.new(-105 + math.sin(elapsed) * 1.5, 61 + math.sin(elapsed * 2), 0)
+		if elapsed < 10 then return end
+		if not finale then finale = true; s:phase("THE MAGMA IS RISING!", "Stay on the top GREEN crate or a roof. Dodge lava bombs.", "eruption", "Finale") end
+		local level = math.min(39, 18 + (elapsed - 10) * 2.2)
+		lava.Position = Vector3.new(0, level - 1, 0)
+		for _, player in ipairs(s:players()) do
+			local _, _, root = s:character(player)
+			if root and root.Position.Y < level + 2 then s:hit(player, 14, 1, "volcanoLava") end
+		end
+	end)
+end, 1, 1.5)
+
+add("ufo_invasion", "THEY CAME FOR THE BUTTON", "Leave the green target circles before the UFO's tractor beam activates. Dodge the final laser salvos.", 26, function(s, c)
+	local pieces = {}
+	local function piece(name, size, offset, color, shape)
+		local part = s:part(name, size, Vector3.new(0, 74, 0) + offset, color, Enum.Material.Metal, shape)
+		table.insert(pieces, { Part = part, Offset = offset })
+		return part
+	end
+	local saucer = piece("UFOHull", Vector3.new(4, 28, 28), Vector3.zero, Color3.fromRGB(96, 117, 143), Enum.PartType.Cylinder)
+	saucer.Orientation = Vector3.new(0, 0, 90)
+	-- Cylinder orientation is kept in the piece's local offset frame.
+	pieces[1].Rotation = CFrame.Angles(0, 0, math.pi / 2)
+	local dome = piece("UFODome", Vector3.new(14, 7, 14), Vector3.new(0, 3, 0), Color3.fromRGB(113, 244, 229), Enum.PartType.Ball)
+	dome.Transparency = 0.28
+	for index = 1, 12 do
+		local angle = index * math.pi / 6
+		local light = piece("AlienRimLight", Vector3.new(2.3, 1.1, 2.3), Vector3.new(math.cos(angle) * 12, -1.2, math.sin(angle) * 12), index % 2 == 0 and GREEN or PURPLE, Enum.PartType.Ball)
+		light.Material = Enum.Material.Neon
+	end
+	glow(dome, GREEN, 2, 45)
+	local beam = s:part("AlienTractorBeam", Vector3.new(39, 17, 17), Vector3.new(0, 53, 0), GREEN, Enum.Material.Neon, Enum.PartType.Cylinder)
+	beam.Orientation = Vector3.new(0, 0, 90)
+	beam.Transparency = 1
+	local beamPosition, lockTime, targeting, warning = Vector3.zero, 0, false, nil
+	local nextLock = 4
+	s:phase("A UFO HAS LOCKED ONTO THE ARENA!", "Move away from GREEN targets before the tractor beam activates.", "sciFi", "Warning")
+	s:loop(function(elapsed)
+		if elapsed >= nextLock and elapsed < 20 then
+			local players = s:players()
+			if #players > 0 then
+				local target = players[random:NextInteger(1, #players)]
+				local _, _, root = s:character(target)
+				if root then
+					if warning then warning:Destroy() end
+					beamPosition, lockTime, targeting = Vector3.new(root.Position.X, TOP, root.Position.Z), elapsed, true
+					warning = marker(s, beamPosition, 8.5, GREEN, "AlienTarget")
+					label(s, warning, "TRACTOR BEAM: MOVE!", GREEN)
+					nextLock = elapsed + 6
+					s:phase("TRACTOR BEAM LOCKING ON!", "Leave the green target. The beam lifts anyone inside.", "sciFi", "Active")
+				end
+			end
+		end
+		local shipPosition = targeting and beamPosition + Vector3.new(0, 45, 0) or Vector3.new(math.sin(elapsed * 0.3) * 42, 76, math.cos(elapsed * 0.3) * 42)
+		for _, item in ipairs(pieces) do item.Part.CFrame = CFrame.new(shipPosition + item.Offset) * (item.Rotation or CFrame.new()) end
+		local beamActive = targeting and elapsed - lockTime >= 2.2 and elapsed - lockTime < 4.6
+		beam.Transparency = beamActive and 0.7 or 1
+		beam.Position = beamPosition + Vector3.new(0, 22, 0)
+		if targeting and elapsed - lockTime >= 4.6 then targeting = false; if warning then warning:Destroy(); warning = nil end end
+		if beamActive then
+			for _, player in ipairs(s:players()) do
+				local _, _, root = s:character(player)
+				if root and flatDistance(root.Position, beamPosition) < 8.5 and root.Position.Y < TOP + 40 then
+					root.AssemblyLinearVelocity = Vector3.new(root.AssemblyLinearVelocity.X * 0.7, 31, root.AssemblyLinearVelocity.Z * 0.7)
+					s:hit(player, 12, 1, "alienBeam")
+				end
+			end
+		end
+	end)
+	s:spawn(function()
+		if not s:wait(19) then return end
+		s:phase("FINAL LASER SALVO!", "Dodge the yellow laser targets. Stay mobile.", "sciFi", "Finale")
+		for _ = 1, 2 do
+			for index, player in ipairs(shuffled(s:players())) do
+				if index > 3 then break end
+				local _, _, root = s:character(player)
+				if root then strike(s, root.Position, 5.5, 28, "lightning") end
+			end
+			if not s:wait(3) then return end
+		end
+	end)
+end, 1, 1.4)
+
+add("kraken_attack", "KRAKEN BELOW!", "The monster marks islands before slamming them. Then jump over its sweeping tentacles or climb a roof.", 27, function(s, c)
+	local body = s:part("KrakenHead", Vector3.new(29, 26, 29), Vector3.new(0, 28, -104), Color3.fromRGB(86, 67, 147), Enum.Material.SmoothPlastic, Enum.PartType.Ball)
+	local face = {}
+	for _, sign in ipairs({ -1, 1 }) do
+		local eye = s:part("KrakenEye", Vector3.new(6, 6, 2.2), Vector3.new(sign * 6.8, 36, -91), GOLD, Enum.Material.Neon, Enum.PartType.Ball)
+		local pupil = s:part("KrakenPupil", Vector3.new(2, 4.5, 2.4), eye.Position + Vector3.new(0, 0, 0.8), Color3.fromRGB(39, 26, 66), Enum.Material.SmoothPlastic, Enum.PartType.Ball)
+		table.insert(face, { Part = eye, Offset = eye.Position - body.Position })
+		table.insert(face, { Part = pupil, Offset = pupil.Position - body.Position })
+	end
+	label(s, body, "SOMETHING IS VERY WRONG", PURPLE)
+	local tentacles = {}
+	for index = 1, 6 do
+		local segments = {}
+		for segment = 1, 5 do
+			local part = s:part("KrakenTentacle", Vector3.new(6 - segment * 0.65, 6 - segment * 0.65, 9), Vector3.new(0, 15, -90), Color3.fromRGB(119, 86, 175), Enum.Material.SmoothPlastic, Enum.PartType.Ball)
+			table.insert(segments, part)
+		end
+		table.insert(tentacles, segments)
+	end
+	local attacking = {}
+	s:phase("TENTACLES ARE RISING FROM THE VOID!", "Leave any purple-marked island before the tentacle lands.", "storm", "Warning")
+	s:loop(function(elapsed)
+		body.Position = Vector3.new(0, 28 + math.sin(elapsed * 1.3) * 2, -104)
+		for _, detail in ipairs(face) do detail.Part.Position = body.Position + detail.Offset end
+		for index, segments in ipairs(tentacles) do
+			if attacking[index] then continue end
+			for segment, part in ipairs(segments) do
+				local angle = index * math.pi / 3 + segment * 0.1 + elapsed * 0.2
+				part.CFrame = CFrame.new(math.cos(angle) * (10 + segment * 5), 10 + segment * 3 + math.sin(elapsed * 2 + segment) * 3, -98 + math.sin(angle) * (10 + segment * 5)) * CFrame.Angles(segment * 0.25, angle, 0)
+			end
+		end
+	end)
+	s:spawn(function()
+		if not s:wait(4) then return end
+		for wave = 1, 3 do
+			s:phase("THE KRAKEN IS STRIKING!", "Escape the marked islands. The tentacles crush low ground.", "storm", "Active")
+			local platforms = shuffled(c.World.Platforms)
+			for index = 1, 2 do
+				local target = platforms[index].Position
+				local limb = (wave - 1) * 2 + index
+				local warning = marker(s, target, 10, PURPLE, "KrakenWarning")
+				label(s, warning, "TENTACLE STRIKE!", PURPLE)
+				attacking[limb] = true
+				s:spawn(function()
+					local origin = Vector3.new(target.X * 1.35, TOP - 8, target.Z * 1.35)
+					for frame = 1, 12 do
+						if not s:wait(0.2) then return end
+						local progress = frame / 12
+						for segment, part in ipairs(tentacles[limb]) do
+							local fraction = segment / 5
+							local tip = origin:Lerp(Vector3.new(target.X, TOP + 3 + (1 - progress) * 34, target.Z), fraction)
+							part.CFrame = CFrame.new(tip) * CFrame.Angles(0, math.atan2(target.X, target.Z), math.sin(progress * math.pi) * 0.5)
+						end
+					end
+					warning:Destroy()
+					s:area(Vector3.new(target.X, TOP + 4, target.Z), 10, 34, 10, "tentacle")
+					if not s:active() then return end
+					impact(s, Vector3.new(target.X, TOP + 1, target.Z), 10, PURPLE, "impact")
+					if not s:wait(1.2) then return end
+					attacking[limb] = nil
+				end)
+			end
+			if not s:wait(4.5) then return end
+		end
+		if not s:active() then return end
+		s:phase("TENTACLE SWEEP!", "JUMP over the purple arm or climb a roof!", "warning", "Finale")
+		local sweep = s:part("KrakenSweepingTentacle", Vector3.new(148, 2, 2.5), Vector3.new(0, TOP + 1.5, 0), PURPLE, Enum.Material.SmoothPlastic)
+		s:loop(function(age)
+			sweep.CFrame = CFrame.new(0, TOP + 1.5, 0) * CFrame.Angles(0, age * 0.7, 0)
+			if age < 2 then return end
+			for _, player in ipairs(s:players()) do
+				local _, _, root = s:character(player)
+				if root then
+					local relative = sweep.CFrame:PointToObjectSpace(root.Position)
+					if math.abs(relative.Z) < 3 and math.abs(relative.X) < 74 and relative.Y < 4 then s:hit(player, 25, 1.5, "krakenSweep") end
+				end
+			end
+		end)
+	end)
+end, 1, 1.4)
+
+add("blizzard", "WHITEOUT", "Reach an ORANGE heat shelter before the cold arrives. Wind gusts push exposed survivors toward the edge.", 26, function(s, c)
+	local warm = {}
+	for index, platform in ipairs(c.World.Platforms) do
+		if index % 2 == 0 then
+			local position = platform.Position + Vector3.new(0, 0, -5)
+			table.insert(warm, position)
+			local roof = s:part("BlizzardShelter", Vector3.new(10, 0.7, 8), Vector3.new(position.X, TOP + 8, position.Z), Color3.fromRGB(237, 250, 255), Enum.Material.Ice)
+			for _, offset in ipairs({ -4, 4 }) do s:part("ShelterPost", Vector3.new(0.5, 8, 0.5), Vector3.new(position.X + offset, TOP + 4, position.Z + 3), GOLD) end
+			local heater = s:part("WarmHeater", Vector3.new(2, 2, 2), Vector3.new(position.X, TOP + 1.5, position.Z), Color3.fromRGB(255, 156, 77), Enum.Material.Neon)
+			glow(heater, GOLD, 3, 16)
+			emitter(heater, GOLD, 8, 3, 0.35, 0.8)
+			label(s, roof, "WARM SHELTER", GOLD)
+			marker(s, position, 6.5, GOLD, "WarmZone")
 		end
 	end
-	if #eligible == 0 then return nil end
-	local roll = random:NextNumber(0, total)
-	for _, entry in ipairs(eligible) do roll -= entry.Weight; if roll <= 0 then return entry.Definition end end
-	return eligible[#eligible].Definition
+	for _, part in ipairs(surfaceParts(c)) do s:save(part, { Color = Color3.fromRGB(219, 244, 255), Material = Enum.Material.Snow }) end
+	local snowCloud = s:part("BlizzardCloud", Vector3.new(156, 1, 156), Vector3.new(0, 71, 0), Color3.new(1, 1, 1))
+	snowCloud.Transparency = 1
+	local snow = emitter(snowCloud, Color3.new(1, 1, 1), 120, 22, 0.65, 2.5, Enum.NormalId.Bottom)
+	snow.SpreadAngle = Vector2.new(12, 12)
+	local streaks = {}
+	for index = 1, 18 do
+		local streak = s:part("WindStreak", Vector3.new(13, 0.13, 0.13), Vector3.new(-72 + index * 8, TOP + 6 + index % 5, -70 + index * 7), Color3.fromRGB(228, 250, 255), Enum.Material.Neon)
+		streak.Transparency = 0.45
+		table.insert(streaks, streak)
+	end
+	s:phase("WHITEOUT APPROACHING!", "Find an ORANGE heat shelter before the cold arrives.", "storm", "Warning")
+	local announced, final, lastGust = false, false, -1
+	s:loop(function(elapsed)
+		local direction = math.floor(elapsed / 6) % 2 == 0 and 1 or -1
+		for index, streak in ipairs(streaks) do streak.Position = Vector3.new(((elapsed * 24 * direction + index * 9 + 160) % 160) - 80, TOP + 6 + index % 5, -70 + index * 7) end
+		if elapsed < 7 then return end
+		if not announced then announced = true; s:phase("THE FREEZE HAS ARRIVED!", "ORANGE shelters stop cold damage and wind gusts.", "storm", "Active") end
+		if elapsed >= 18 and not final then final = true; s:phase("TEMPERATURE DROPPING!", "Stay in an ORANGE shelter. The final gusts are brutal.", "storm", "Finale") end
+		local gust = math.floor((elapsed - 7) / 5)
+		local gusting = (elapsed - 7) % 5 > 2
+		if gust ~= lastGust then lastGust = gust; s:cue("storm", Vector3.new(0, TOP, 0), 1) end
+		for _, player in ipairs(s:players()) do
+			local _, _, root = s:character(player)
+			if root then
+				local sheltered = false
+				for _, position in ipairs(warm) do if flatDistance(root.Position, position) <= 7 and root.Position.Y < TOP + 9 then sheltered = true; break end end
+				if not sheltered then
+					if gusting then root.AssemblyLinearVelocity += Vector3.new(direction * 2.5, 0, 0) end
+					s:hit(player, final and 10 or 7, 1, "frost")
+				end
+			end
+		end
+	end)
+end, 1, 1.25)
+
+add("meteor_apocalypse", "THE SKY IS BREAKING", "Three marked islands take huge impacts, then crumble. Escape each strike and jump the final shockwave.", 28, function(s, c)
+	local asteroid = s:part("ApocalypseAsteroid", Vector3.new(34, 30, 32), Vector3.new(0, TOP + 103, 0), Color3.fromRGB(72, 61, 71), Enum.Material.Slate, Enum.PartType.Ball)
+	emitter(asteroid, Color3.fromRGB(255, 164, 78), 40, 24, 2.3, 1)
+	local selected = shuffled(c.World.Platforms)
+	s:phase("THE SKY IS BREAKING APART!", "Evacuate the marked islands. Impacted islands will crumble.", "impact", "Warning")
+	s:spawn(function()
+		if not s:wait(3) then return end
+		for wave = 1, 3 do
+			local platform = selected[wave]
+			local position = platform.Position
+			local warning = marker(s, position, 12, RED, "ApocalypseTarget")
+			label(s, warning, "ISLAND WILL CRUMBLE!", RED)
+			s:phase("AN ISLAND HAS BEEN MARKED!", "Leave the marked island NOW. It collapses after impact.", "warning", "Active")
+			if not s:wait(3.7) then return end
+			warning:Destroy()
+			strike(s, position, 11, 45, "meteor")
+			if not s:wait(2.6) then return end
+			for _, part in ipairs(platform.Parent:GetDescendants()) do
+				if part:IsA("BasePart") then s:save(part, { CanCollide = false, Transparency = 0.95 }) end
+			end
+			local bridge = c.World.Bridges and c.World.Bridges[table.find(c.World.Platforms, platform)]
+			if bridge then hideBridge(s, bridge) end
+			s:cue("impact", position, 1.5)
+		end
+	end)
+	local startedFinale = false
+	local ring = {}
+	for index = 1, 20 do
+		local segment = s:part("ApocalypseShockwave", Vector3.new(3, 0.7, 4), Vector3.new(0, TOP + 1, 0), GOLD, Enum.Material.Neon)
+		segment.Transparency = 1
+		table.insert(ring, segment)
+	end
+	s:loop(function(elapsed)
+		asteroid.CFrame = CFrame.new(0, TOP + 103 - math.min(35, elapsed * 1.5), 0) * CFrame.Angles(elapsed * 0.05, elapsed * 0.08, elapsed * 0.03)
+		if elapsed < 23 then return end
+		if not startedFinale then startedFinale = true; s:phase("FINAL SHOCKWAVE!", "JUMP over the gold ring. Remaining islands stay solid.", "impact", "Finale") end
+		local radius = (elapsed - 23) * 20
+		for index, segment in ipairs(ring) do
+			local angle = index * math.pi * 2 / #ring
+			segment.Transparency = radius > 83 and 1 or 0.15
+			segment.Size = Vector3.new(2.4, 0.7, math.max(3, radius * 0.34))
+			segment.CFrame = CFrame.new(math.cos(angle) * radius, TOP + 1, math.sin(angle) * radius) * CFrame.Angles(0, -angle, 0)
+		end
+		if radius > 83 then return end
+		for _, player in ipairs(s:players()) do
+			local _, _, root = s:character(player)
+			if root and math.abs(flatDistance(root.Position, Vector3.zero) - radius) < 3.5 and root.Position.Y < TOP + 5 then s:hit(player, 35, 4, "apocalypseRing") end
+		end
+	end)
+end, 1, 1.4)
+
+add("flash_flood", "MONSOON: FLOAT OR FLEE", "Jump onto GREEN crates before water rises. Drifting rafts offer a risky shortcut above the current.", 27, function(s, c)
+	for _, platform in ipairs(c.World.Platforms) do escapeCrates(s, platform.Position, GREEN) end
+	shower(s, BLUE)
+	local water = s:part("FlashFloodWater", Vector3.new(159, 2, 159), Vector3.new(0, 13, 0), Color3.fromRGB(62, 167, 219), Enum.Material.Glass)
+	water.Transparency = 0.4
+	local rafts = {}
+	for index = 1, 6 do
+		local angle = index * math.pi / 3
+		local raft = s:part("RescueRaft", Vector3.new(13, 1.3, 8), Vector3.new(math.cos(angle) * 37, 17, math.sin(angle) * 37), Color3.fromRGB(218, 166, 102), Enum.Material.WoodPlanks, nil, true)
+		label(s, raft, "RESCUE RAFT", GREEN)
+		local ring = s:part("RaftBuoy", Vector3.new(0.8, 4, 4), raft.Position + Vector3.new(0, 1, 0), Color3.fromRGB(255, 171, 76), Enum.Material.SmoothPlastic, Enum.PartType.Cylinder)
+		ring.Orientation = Vector3.new(0, 0, 90)
+		table.insert(rafts, { Part = raft, Buoy = ring, Angle = angle })
+	end
+	s:phase("MONSOON! HIGH GROUND NOW!", "Jump onto GREEN crates. Floodwater rises after six seconds.", "storm", "Warning")
+	local active, final = false, false
+	s:loop(function(elapsed)
+		local level = math.min(38, 15 + math.max(0, elapsed - 6) * 1.8)
+		water.Position = Vector3.new(0, level - 1, 0)
+		for _, raft in ipairs(rafts) do
+			local angle = raft.Angle + math.max(0, elapsed - 6) * 0.035
+			raft.Part.CFrame = CFrame.new(math.cos(angle) * 39, level + 0.9, math.sin(angle) * 39) * CFrame.Angles(0, -angle, math.sin(elapsed * 1.7) * 0.025)
+			raft.Buoy.Position = raft.Part.Position + Vector3.new(0, 1.1, 0)
+		end
+		if elapsed < 6 then return end
+		if not active then active = true; s:phase("THE FLOOD IS RISING!", "Jump up the GREEN crates or board a drifting rescue raft.", "storm", "Active") end
+		if elapsed >= 18 and not final then final = true; s:phase("THE CURRENT IS STRONGER!", "Stay above water. Rafts and top GREEN crates are safe.", "storm", "Finale") end
+		for _, player in ipairs(s:players()) do
+			local _, _, root = s:character(player)
+			if root and root.Position.Y < level + 1.5 then
+				root.AssemblyLinearVelocity += Vector3.new(1.4, 1, 0.7)
+				s:hit(player, 10, 1, "flood")
+			end
+		end
+	end)
+end, 1, 1.25)
+
+add("singularity", "A HOLE IN THE SKY", "Stand near a GREEN anchor to resist the black hole. Dodge orbiting debris during the final collapse.", 26, function(s, c)
+	local core = s:part("SingularityCore", Vector3.new(13, 13, 13), Vector3.new(0, TOP + 19, 0), Color3.fromRGB(10, 12, 30), Enum.Material.SmoothPlastic, Enum.PartType.Ball)
+	local halo = s:part("SingularityHalo", Vector3.new(0.7, 23, 23), core.Position, PURPLE, Enum.Material.Neon, Enum.PartType.Cylinder)
+	halo.Orientation = Vector3.new(0, 0, 90)
+	halo.Transparency = 0.4
+	glow(halo, PURPLE, 2.5, 50)
+	emitter(core, PURPLE, 45, 13, 0.6, 1.2)
+	local anchors = {}
+	for _, platform in ipairs(c.World.Platforms) do
+		local position = platform.Position + Vector3.new(0, 0, -6)
+		local anchor = s:part("GravityAnchor", Vector3.new(1.8, 5.5, 1.8), Vector3.new(position.X, TOP + 2.75, position.Z), GREEN, Enum.Material.Neon)
+		label(s, anchor, "GRAVITY ANCHOR", GREEN)
+		marker(s, position, 6, GREEN, "AnchorSafeZone")
+		table.insert(anchors, position)
+	end
+	local orbit = {}
+	for index = 1, 12 do
+		local rock = s:part("OrbitalDebris", Vector3.new(3.3, 3.3, 3.3), Vector3.new(0, TOP + 3, 0), Color3.fromRGB(148, 137, 180), Enum.Material.Slate)
+		emitter(rock, PURPLE, 3, 2, 0.25, 0.3)
+		table.insert(orbit, rock)
+	end
+	s:phase("THE SKY HAS A HOLE IN IT!", "GREEN anchors protect you from the pull. Find one now.", "sciFi", "Warning")
+	local active, finale, lastPulse = false, false, 0
+	s:loop(function(elapsed)
+		halo.CFrame = CFrame.new(core.Position) * CFrame.Angles(0.18, elapsed * 0.4, math.pi / 2)
+		local dangerous = elapsed >= 17
+		for index, rock in ipairs(orbit) do
+			local angle = elapsed * 0.6 + index * math.pi / 6
+			local radius = dangerous and 59 or 35
+			rock.CFrame = CFrame.new(math.cos(angle) * radius, TOP + 3 + math.sin(elapsed + index) * 0.6, math.sin(angle) * radius) * CFrame.Angles(elapsed, angle, index)
+		end
+		if elapsed < 5 then return end
+		if not active then active = true; s:phase("THE SINGULARITY IS PULLING!", "Stay beside a GREEN anchor to resist gravity.", "sciFi", "Active") end
+		if dangerous and not finale then finale = true; s:phase("ORBITAL DEBRIS INCOMING!", "Keep close to an anchor, but JUMP over passing debris.", "warning", "Finale") end
+		if elapsed - lastPulse > 5 then lastPulse = elapsed; s:cue("sciFi", core.Position, 1.2) end
+		for _, player in ipairs(s:players()) do
+			local _, _, root = s:character(player)
+			if root then
+				local protected = false
+				for _, position in ipairs(anchors) do if flatDistance(root.Position, position) <= 7 then protected = true; break end end
+				local delta = Vector3.new(-root.Position.X, 0, -root.Position.Z)
+				if not protected and delta.Magnitude > 1 then
+					root.AssemblyLinearVelocity += delta.Unit * 2.7 + Vector3.new(0, delta.Magnitude < 17 and 1.2 or 0, 0)
+					if delta.Magnitude < 9 then s:hit(player, 12, 1, "singularity") end
+				end
+				if dangerous then
+					for _, rock in ipairs(orbit) do if (root.Position - rock.Position).Magnitude < 4.2 then s:hit(player, 20, 1.3, "orbitalDebris") end end
+				end
+			end
+		end
+	end)
+end, 1, 1.35)
+
+add("murder_mystery", "ONE KNIFE. ONE SHERIFF.", "A murderer and sheriff hide among the survivors. Equip your gear; face opponents and click or tap. Innocents should escape.", 30, function(s, c)
+	local players = shuffled(s:players())
+	if #players < 3 then return end
+	local murderer, sheriff = players[1], players[2]
+	s:phase("CHECK YOUR ROLE. TRUST CAREFULLY.", "Roles are private. Equip your gear, face an opponent, then click or tap.", "warning", "Warning")
+	for _, player in ipairs(players) do
+		if player == murderer then s:role(player, "Murderer"); s:hint(player, "MURDERER: Equip your knife. Face a nearby survivor; click / tap.")
+		elseif player == sheriff then s:role(player, "Sheriff"); s:hint(player, "SHERIFF: Equip your blaster. Face the murderer; click / tap.")
+		else s:role(player, "Innocent"); s:hint(player, "INNOCENT: Hide or flee. Survive until the mystery ends.") end
+	end
+	s:buff(murderer, { WalkSpeed = 24 })
+	local releaseKnife = weapon(s, murderer, { Name = "Murderer's Knife", Knife = true, Color = RED, Range = 6.5, Damage = 65, Cooldown = 0.85 })
+	local releaseGun = weapon(s, sheriff, { Name = "Sheriff Blaster", Gun = true, Color = BLUE, Range = 90, Damage = 110, Cooldown = 1.35, Target = function(target) return target == murderer end })
+	local resolved = false
+	s:loop(function(elapsed)
+		if resolved or elapsed < 3 then return end
+		if not c.IsAlive(murderer) then
+			resolved = true
+			releaseKnife(); releaseGun()
+			s:phase("THE MURDERER HAS BEEN STOPPED!", "The surviving innocents are safe. The next event is coming.", "relief", "Finale")
+			for _, player in ipairs(s:players()) do c.Award(player, 12, 0) end
+		elseif elapsed >= 29 then
+			resolved = true
+			for _, player in ipairs(s:players()) do if player ~= murderer then c.Award(player, 15, 0) end end
+			s:phase("THE MYSTERY IS OVER!", "Survivors earned a reward. Weapons vanish when the event ends.", "relief", "Finale")
+		end
+	end)
+end, 3, 2.3)
+
+add("sword_duel", "A DUEL OF BAD DECISIONS", "Two survivors get swords. Equip, face your rival and click or tap to swing. Other survivors cannot be hit.", 28, function(s, c, presser)
+	local players = shuffled(s:players())
+	if #players < 2 then return end
+	local first = presser and c.IsAlive(presser) and presser or players[1]
+	local second = players[1] == first and players[2] or players[1]
+	s:role(first, "Duelist", BLUE); s:role(second, "Duelist", RED)
+	s:hint(first, "DUEL: Equip your sword. Face your rival; click / tap to swing.")
+	s:hint(second, "DUEL: Equip your sword. Face your rival; click / tap to swing.")
+	weapon(s, first, { Name = "Duel Sword", Color = BLUE, Range = 7, Damage = 38, Cooldown = 0.7, Target = function(target) return target == second end })
+	weapon(s, second, { Name = "Duel Sword", Color = RED, Range = 7, Damage = 38, Cooldown = 0.7, Target = function(target) return target == first end })
+	toast(c, first.DisplayName .. " challenges " .. second.DisplayName .. " to a sword duel!")
+	local paid = false
+	s:loop(function(elapsed)
+		if paid or elapsed < 3 then return end
+		if c.IsAlive(first) ~= c.IsAlive(second) then
+			paid = true
+			c.Award(c.IsAlive(first) and first or second, 20, 0)
+		end
+	end)
+end, 2, 2.1)
+
+add("free_swords", "EVERYONE BROUGHT A SWORD", "Every survivor gets a sword. No teams. Equip, face a nearby opponent, and click or tap to swing.", 28, function(s)
+	for _, player in ipairs(s:players()) do
+		s:role(player, "Swordfighter")
+		s:hint(player, "SWORD BRAWL: Equip your sword. Face a nearby enemy; click / tap.")
+		weapon(s, player, { Name = "Chaos Sword", Color = GOLD, Range = 7, Damage = 32, Cooldown = 0.65 })
+	end
+end, 2, 2.1)
+
+add("battle_kit", "ONE LUCKY ARSENAL", "One random survivor receives a blaster, knife and extra health. Everyone else should use the houses for cover.", 26, function(s, c)
+	local players = s:players()
+	if #players < 2 then return end
+	local chosen = players[random:NextInteger(1, #players)]
+	local _, humanoid = s:character(chosen)
+	s:role(chosen, "Armed Survivor", PURPLE)
+	s:hint(chosen, "BATTLE KIT: Equip blaster or knife. Face your enemy; click / tap.")
+	s:buff(chosen, { MaxHealth = humanoid.MaxHealth + 40 })
+	humanoid.Health = math.min(humanoid.MaxHealth, humanoid.Health + 40)
+	weapon(s, chosen, { Name = "Gifted Blaster", Gun = true, Color = PURPLE, Range = 85, Damage = 28, Cooldown = 0.8 })
+	weapon(s, chosen, { Name = "Gifted Knife", Knife = true, Color = GOLD, Range = 6.5, Damage = 40, Cooldown = 0.75 })
+	toast(c, chosen.DisplayName .. " received a battle kit! Houses block blaster shots.")
+end, 2, 2)
+
+add("blaster_brawl", "FREE BLASTERS. BAD IDEA.", "Everyone receives a blaster. Equip, face a survivor, then click or tap. Use houses to block incoming shots.", 28, function(s)
+	for _, player in ipairs(s:players()) do
+		s:role(player, "Blasterfighter")
+		s:hint(player, "BLASTER BRAWL: Equip your blaster. Face your enemy; click / tap.")
+		weapon(s, player, { Name = "Chaos Blaster", Gun = true, Color = BLUE, Range = 90, Damage = 25, Cooldown = 0.7 })
+	end
+end, 2, 2.3)
+
+Events.Definitions = definitions
+function Events.choose(aliveCount, previousId, threatLevel, history)
+	local recent = history
+	if not recent then
+		recent = previousId and { { Id = previousId } } or {}
+	end
+	return Director.select(definitions, aliveCount or 1, threatLevel or 1, recent, random)
 end
 return Events

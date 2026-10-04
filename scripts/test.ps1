@@ -6,7 +6,7 @@ try {
     if ($luneCommand) { $testRunner = $luneCommand.Source }
     elseif (Test-Path -LiteralPath $localLune) { $testRunner = $localLune }
     else { throw 'Install the pinned tools with rokit install, then run the checks again.' }
-    foreach ($suite in @('tests/run.luau', 'tests/events.luau')) {
+    foreach ($suite in @('tests/run.luau', 'tests/events.luau', 'tests/client.luau', 'tests/supplies_obby.luau')) {
         & $testRunner run $suite
         if ($LASTEXITCODE -ne 0) { throw "Game checks failed: $suite" }
     }

@@ -1,0 +1,8 @@
+Original sound pack permission
+
+To the extent allowed by law, the original sound effects in this directory and their
+synthesis source may be used, copied, modified, distributed, and commercially used
+without attribution or royalties. No third-party recordings or samples were used.
+
+This permission covers the synthesized WAV files and scripts/generate_audio.py only.
+It does not grant rights to Roblox's bundled sounds, trademarks, or unrelated assets.

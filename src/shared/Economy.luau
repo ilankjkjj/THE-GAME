@@ -1,51 +1,28 @@
 local Economy = {}
-function Economy.multiplier(data, catalog)
-	local best = 1
-	for id in pairs(data.Owned) do
-		local item = catalog.ById[id]
-		if item and item.Multiplier then
-			best = math.max(best, item.Multiplier)
-		end
-	end
-	return best
-end
-function Economy.awardCoins(data, amount, catalog)
-	local earned = math.floor(amount * Economy.multiplier(data, catalog))
-	data.Coins += earned
+function Economy.award(data, amount)
+	if type(amount) ~= "number" or amount ~= amount or math.abs(amount) == math.huge or amount <= 0 then return 0 end
+	local earned = math.min(math.floor(amount), math.max(0, 1e12 - data.Tokens))
+	data.Tokens += earned
 	return earned
 end
-function Economy.press(data, cost, config, catalog)
-	if data.Coins < cost then
-		return false, "You need " .. cost .. " coins to press during the button tax."
-	end
-	data.Coins -= cost
-	data.Presses += 1
-	data.Points += config.PointsPerPress
-	Economy.awardCoins(data, config.CoinsPerPress, catalog)
+function Economy.press(data)
+	data.Presses = math.min(1e12, data.Presses + 1)
 	return true
 end
 function Economy.purchase(data, id, catalog)
 	local item = catalog.ById[id]
-	if not item then
-		return false, "That item does not exist."
-	end
-	if not data.Owned[id] then
-		if data.Points < item.Price then
-			return false, "You need " .. (item.Price - data.Points) .. " more Button Points."
-		end
-		data.Points -= item.Price
-		data.Owned[id] = true
-	end
-	if item.Category ~= "Multiplier" then
-		data.Equipped[item.Category] = id
-	end
-	return true, item.Name .. " is ready!"
+	if not item then return false, "That supply does not exist." end
+	local stock = data.Inventory[id] or 0
+	if stock >= item.MaxStock then return false, "You already have " .. item.MaxStock .. " of this supply." end
+	if data.Tokens < item.Price then return false, "You need " .. (item.Price - data.Tokens) .. " more tokens." end
+	data.Tokens -= item.Price
+	data.Inventory[id] = stock + 1
+	return true, item.Name .. " bought! Find it in your backpack next round."
 end
-function Economy.unequip(data, category, catalog)
-	if not table.find(catalog.Categories, category) or category == "Multiplier" then
-		return false, "That category cannot be unequipped."
-	end
-	data.Equipped[category] = category == "Skin" and "skin_classic" or nil
-	return true, "Equipment cleared."
+function Economy.consume(data, id, catalog)
+	if not catalog.ById[id] or (data.Inventory[id] or 0) < 1 then return false end
+	data.Inventory[id] -= 1
+	if data.Inventory[id] == 0 then data.Inventory[id] = nil end
+	return true
 end
-return Economy
+return table.freeze(Economy)

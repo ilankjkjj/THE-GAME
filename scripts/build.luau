@@ -6,7 +6,7 @@ assert(fs.isFile(source), "Run argon build default.project.json -o build/DontPre
 local game = roblox.deserializePlace(fs.readFile(source))
 local environment = Environment.new(game)
 environment.load("src/server/World.luau").build()
-environment.Workspace.CurrentCamera.CFrame = roblox.CFrame.lookAt(roblox.Vector3.new(275, 175, 230), roblox.Vector3.new(82, 25, 0))
+environment.Workspace.CurrentCamera.CFrame = roblox.CFrame.lookAt(roblox.Vector3.new(262, 152, 220), roblox.Vector3.new(89, 28, 0))
 fs.writeFile("build/DontPressTheButton.rbxl", roblox.serializePlace(game))
 fs.writeFile(source, roblox.serializePlace(game, true))
 print("Built bright survival arena and lobby: build/DontPressTheButton.rbxl")

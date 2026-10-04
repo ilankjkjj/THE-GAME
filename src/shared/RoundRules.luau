@@ -7,7 +7,7 @@ function RoundRules.outcome(aliveCount, startingCount, timeExpired)
 	if aliveCount == 0 then return "Draw" end
 	if startingCount > 1 and aliveCount == 1 then return "Winner" end
 	if startingCount == 1 and timeExpired then return "SoloSurvived" end
-	if startingCount > 1 and timeExpired then return "SuddenDeath" end
+	if startingCount > 1 and timeExpired then return "Timeout" end
 	return "Continue"
 end
 function RoundRules.threat(elapsed, config)

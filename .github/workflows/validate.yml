@@ -14,6 +14,8 @@ jobs:
         run: |
           lune run tests/run.luau
           lune run tests/events.luau
+          lune run tests/client.luau
+          lune run tests/supplies_obby.luau
       - name: Build complete Roblox place
         run: |
           argon build default.project.json --output build/DontPressTheButton.rbxlx --xml
