@@ -1,16 +1,17 @@
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local Catalog = require(game:GetService("ReplicatedStorage").Shared.Catalog)
+local Config = require(game:GetService("ReplicatedStorage").Shared.Config)
 local UI = {}
 local palette = {
-	Paper = Color3.fromRGB(224, 224, 224), White = Color3.fromRGB(245, 245, 245),
-	Ink = Color3.fromRGB(30, 30, 30), Muted = Color3.fromRGB(80, 80, 80),
-	Line = Color3.fromRGB(76, 76, 76), Coral = Color3.fromRGB(235, 65, 45),
-	CoralPale = Color3.fromRGB(255, 220, 211), CoralInk = Color3.fromRGB(158, 38, 24),
-	CoralButton = Color3.fromRGB(205, 43, 28), Teal = Color3.fromRGB(43, 118, 37),
-	TealPale = Color3.fromRGB(218, 240, 212), Gold = Color3.fromRGB(127, 82, 0),
-	GoldPale = Color3.fromRGB(255, 225, 111), Lilac = Color3.fromRGB(0, 84, 160),
-	LilacPale = Color3.fromRGB(210, 228, 245), Disabled = Color3.fromRGB(195, 195, 195),
+	Paper = Color3.fromRGB(255, 252, 246), White = Color3.fromRGB(255, 255, 255),
+	Ink = Color3.fromRGB(37, 48, 69), Muted = Color3.fromRGB(100, 114, 135),
+	Line = Color3.fromRGB(216, 228, 237), Coral = Color3.fromRGB(247, 107, 94),
+	CoralPale = Color3.fromRGB(255, 232, 223), CoralInk = Color3.fromRGB(167, 54, 43),
+	CoralButton = Color3.fromRGB(209, 62, 57), Teal = Color3.fromRGB(0, 126, 111),
+	TealPale = Color3.fromRGB(221, 248, 236), Gold = Color3.fromRGB(143, 91, 8),
+	GoldPale = Color3.fromRGB(255, 238, 182), Lilac = Color3.fromRGB(88, 97, 182),
+	LilacPale = Color3.fromRGB(233, 236, 255), Disabled = Color3.fromRGB(229, 235, 241),
 }
 local supplyIcons = { medkit = "+", soda = ">>", spring = "↑", shield = "◇" }
 local function make(class, parent, props)
@@ -20,20 +21,20 @@ local function make(class, parent, props)
 	return object
 end
 local function round(object, radius)
-	make("UICorner", object, { CornerRadius = UDim.new(0, math.min(radius or 2, 2)) })
+	make("UICorner", object, { CornerRadius = UDim.new(0, radius or 12) })
 	return object
 end
 local function card(parent, props, color)
 	props.BackgroundColor3 = color or palette.White
 	props.BorderSizePixel = 0
 	local frame = round(make("Frame", parent, props))
-	make("UIStroke", frame, { Color = palette.Line, Thickness = 1, Transparency = 0 })
+	make("UIStroke", frame, { Color = palette.Line, Thickness = 1.2, Transparency = 0.1 })
 	return frame
 end
 local function label(parent, value, size, position, dimensions, color, heavy)
 	return make("TextLabel", parent, {
 		BackgroundTransparency = 1, Text = value,
-		Font = heavy and Enum.Font.SourceSansBold or Enum.Font.SourceSans,
+		FontFace = Font.new("rbxasset://fonts/families/BuilderSans.json", heavy and Enum.FontWeight.Bold or Enum.FontWeight.Medium),
 		TextSize = size, TextColor3 = color or palette.Ink, Position = position, Size = dimensions,
 		TextXAlignment = Enum.TextXAlignment.Left, TextWrapped = true,
 		ZIndex = parent:IsA("GuiObject") and parent.ZIndex + 1 or 2,
@@ -42,11 +43,11 @@ end
 local function button(parent, value, position, dimensions, color, ink)
 	local object = round(make("TextButton", parent, {
 		Text = value, Position = position, Size = dimensions, BackgroundColor3 = color or palette.Paper,
-		TextColor3 = ink or palette.Ink, Font = Enum.Font.SourceSansBold,
+		TextColor3 = ink or palette.Ink, FontFace = Font.new("rbxasset://fonts/families/BuilderSans.json", Enum.FontWeight.Bold),
 		TextSize = 13, BorderSizePixel = 0, AutoButtonColor = true, Selectable = true,
 		ZIndex = parent:IsA("GuiObject") and parent.ZIndex + 1 or 2,
-	}), 2)
-	make("UIStroke", object, { Color = palette.Line, Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border })
+	}), 10)
+	make("UIStroke", object, { Color = palette.Line, Thickness = 1.2, Transparency = 0.15, ApplyStrokeMode = Enum.ApplyStrokeMode.Border })
 	return object
 end
 local function formatNumber(value)
@@ -87,6 +88,12 @@ local function initialOf(name)
 	local nextCharacter = utf8.offset(name, 2)
 	return string.upper(string.sub(name, 1, nextCharacter and nextCharacter - 1 or #name))
 end
+local function eventColor(category, intensity)
+	category = string.lower(tostring(category or ""))
+	if category == "role" or category == "chase" then return palette.Lilac, palette.LilacPale end
+	if category == "relief" or (tonumber(intensity) or 2) <= 1 then return palette.Teal, palette.TealPale end
+	return palette.CoralInk, palette.CoralPale
+end
 function UI.new(callbacks)
 	local self = setmetatable({ Callbacks = callbacks, Entries = {}, Tab = "Shop", CanPress = false }, { __index = UI })
 	local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
@@ -110,6 +117,16 @@ function UI.new(callbacks)
 	self.EventDescription.TextYAlignment = Enum.TextYAlignment.Top
 	self.Hint = label(self.Event, "", 10, UDim2.fromOffset(21, 75), UDim2.new(1, -34, 0, 16), palette.Teal, true)
 	self.Hint.Visible = false
+	self.Stack = make("Frame", gui, { Position = UDim2.fromOffset(14, 114), Size = UDim2.fromOffset(200, 84), BackgroundTransparency = 1, Visible = false })
+	self.ActiveCards = {}
+	for index = 1, 3 do
+		local row = card(self.Stack, { Position = UDim2.fromOffset(0, (index - 1) * 28), Size = UDim2.new(1, 0, 0, 24), Visible = false })
+		local name = label(row, "", 11, UDim2.fromOffset(9, 2), UDim2.new(1, -53, 1, -4), palette.Ink, true)
+		name.TextWrapped, name.TextTruncate = false, Enum.TextTruncate.AtEnd
+		local clock = label(row, "", 11, UDim2.new(1, -42, 0, 2), UDim2.fromOffset(34, 20), palette.Muted, true)
+		clock.TextXAlignment = Enum.TextXAlignment.Right
+		table.insert(self.ActiveCards, { Frame = row, Name = name, Timer = clock })
+	end
 	self.Navigation = make("Frame", gui, { AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 14, 1, -14), Size = UDim2.fromOffset(252, 35), BackgroundTransparency = 1 })
 	self.NavButtons = {}
 	for index, specification in ipairs({ { "SHOP", "Shop", palette.TealPale, palette.Teal }, { "WINS", "Leaderboard", palette.GoldPale, palette.Gold }, { "PLAYERS", "Roster", palette.LilacPale, palette.Lilac } }) do
@@ -131,6 +148,7 @@ function UI.new(callbacks)
 	self.Press = button(self.Actions, "PRESS  [E]", UDim2.fromScale(0, 0), UDim2.fromScale(1, 1), palette.CoralButton, palette.White)
 	self.Press.TextSize = 14
 	self.Press.Visible = false
+	self.PressStroke = self.Press:FindFirstChildOfClass("UIStroke")
 	self.Press.Activated:Connect(function() if self.CanPress and not self.Panel.Visible then callbacks.Press() end end)
 	self.Queue = button(self.Actions, "JOIN NEXT ROUND", UDim2.fromScale(0, 0), UDim2.new(0.65, -3, 1, 0), palette.Teal, palette.White)
 	self.Queue.TextSize = 12
@@ -139,6 +157,8 @@ function UI.new(callbacks)
 	self.Spectate.Visible = false
 	self.Spectate.TextSize = 11
 	self.Spectate.Activated:Connect(function() if callbacks.Spectate then callbacks.Spectate() end end)
+	self.Personal = card(gui, { AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -14, 1, -64), Size = UDim2.fromOffset(235, 36), Visible = false }, palette.GoldPale)
+	self.PersonalText = label(self.Personal, "", 12, UDim2.fromOffset(10, 4), UDim2.new(1, -20, 1, -8), palette.Gold, true)
 	self.Spectator = card(gui, { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -14, 0, 113), Size = UDim2.fromOffset(180, 67), Visible = false }, palette.Paper)
 	self.Watching = label(self.Spectator, "", 13, UDim2.fromOffset(8, 4), UDim2.new(1, -16, 0, 25), palette.Ink, true)
 	self.Watching.TextTruncate = Enum.TextTruncate.AtEnd
@@ -240,11 +260,15 @@ function UI:resize()
 	for index, nav in ipairs(self.NavButtons) do
 		nav.Position = UDim2.fromOffset((index - 1) * 55, 0)
 		nav.Size = UDim2.fromOffset(51, touch and 42 or 35)
-		nav.TextSize = phone and 12 or 13
+		nav.TextSize = phone and 11 or 12
 	end
 	self.Sound.Size = UDim2.fromOffset(touch and 44 or 32, touch and 42 or 35)
-	self.Toast.Position = UDim2.fromOffset(edge, eventHeight + 17)
-	self.Toast.Size = UDim2.fromOffset(eventWidth, 45)
+	self.Stack.Position = UDim2.fromOffset(edge, eventHeight + 17)
+	self.Stack.Size = UDim2.fromOffset(math.min(200, eventWidth), 84)
+	self.Personal.Position = UDim2.new(1, -edge, 1, -(phone and (safeBottom + 52 + (touch and 42 or 35) + 8) or safeBottom + 50))
+	self.Personal.Size = UDim2.fromOffset(actionWidth, phone and 44 or 36)
+	self.PersonalText.TextSize = phone and 11 or 12
+	self.Toast.Size = UDim2.fromOffset(math.min(200, eventWidth), 45)
 	self.ToastText.TextSize = phone and 10 or 11
 	self.Panel.Size = UDim2.fromOffset(math.min(710, size.X - 24), math.min(530, size.Y - 24))
 	self.PanelTitle.TextSize = phone and 19 or (short and 20 or 25)
@@ -260,7 +284,7 @@ end
 function UI:open(tab)
 	self.Tab = tab
 	self.Panel.Visible, self.Overlay.Visible = true, true
-	self.Actions.Visible, self.Event.Visible, self.Health.Visible, self.Spectator.Visible = false, false, false, false
+	self.Actions.Visible, self.Event.Visible, self.Health.Visible, self.Spectator.Visible, self.Stack.Visible, self.Personal.Visible = false, false, false, false, false, false
 	if tab == "Shop" then self:renderShop()
 	elseif tab == "Roster" then self:renderRoster()
 	elseif tab == "Results" then self:renderResults()
@@ -323,14 +347,13 @@ function UI:profile(data, _persistent)
 	if self.Panel.Visible and self.Tab == "Shop" then self:renderShop() end
 end
 function UI:state(state)
-	local previous = self.State
 	self.State = state
 	local phase = state.Phase or "Waiting"
 	self.PhaseLabel.Text = phase == "Round" and (state.SuddenDeath and "SUDDEN DEATH" or ("ROUND " .. tostring(state.RoundNumber or 1))) or (phase == "Intermission" and "STARTING SOON" or (phase == "Results" and "RESULTS" or "LOBBY"))
 	self.PhaseLabel.TextColor3 = phase == "Round" and palette.CoralInk or (phase == "Results" and palette.Gold or palette.Teal)
 	self.RoundInfo.Text = phase == "Round" and (state.RoundMode == "Solo survival" and "SOLO SURVIVAL" or (tostring(state.AliveCount or 0) .. " / " .. tostring(state.RoundPlayers or 0) .. " alive")) or (phase == "Results" and "Next round soon" or (tostring(state.QueuedCount or 0) .. " queued"))
-	self.EventTitle.Text = phase == "Round" and state.EventStage == "Cooldown" and "CATCH YOUR BREATH" or (state.EventName or "PRESS FOR CHAOS")
-	self.EventDescription.Text = phase == "Round" and state.EventStage == "Cooldown" and "The next press starts a new hazard." or (state.EventDescription or "The last survivor takes the crown.")
+	self.EventTitle.Text = state.EventName or "PRESS FOR CHAOS"
+	self.EventDescription.Text = state.EventDescription or "Each press earns Tokens and adds a new surprise."
 	local category = string.lower(tostring(state.EventCategory or ""))
 	self.EventMark.BackgroundColor3 = phase == "Results" and palette.Gold or (phase ~= "Round" and palette.Teal or ((category == "role" or category == "chase") and palette.Lilac or ((tonumber(state.EventIntensity) or 2) <= 1 and palette.Teal or palette.Coral)))
 	self.Event.Visible = not self.Panel.Visible
@@ -342,9 +365,37 @@ function UI:state(state)
 			self:open("Results")
 		elseif self.Panel.Visible and self.Tab == "Results" then self:renderResults() end
 	elseif self.Panel.Visible and self.Tab == "Results" then self:close() end
-	if previous and state.EventId ~= previous.EventId and phase == "Round" and state.Presser and state.Presser ~= "" then
-		self:toast(tostring(state.Presser) .. " pressed the button!", "event")
+	self:tick(self.Nearby)
+end
+function UI:renderActiveEvents(now)
+	local active = {}
+	if self.State and self.State.Phase == "Round" then
+		for _, entry in ipairs(self.State.ActiveEvents or {}) do
+			if type(entry.EndsAt) == "number" and entry.EndsAt > now then table.insert(active, entry) end
+		end
 	end
+	table.sort(active, function(a, b) return a.EndsAt < b.EndsAt end)
+	local maximum = self.Short and self.Touch and 2 or 3
+	local shown = math.min(maximum, #active)
+	for index, view in ipairs(self.ActiveCards) do
+		local entry = active[index]
+		view.Frame.Visible = entry ~= nil and index <= shown
+		if view.Frame.Visible then
+			local ink, tint = eventColor(entry.Category, entry.Intensity)
+			view.Frame.BackgroundColor3 = tint
+			view.Name.Text, view.Name.TextColor3 = entry.Name or "Chaos", ink
+			view.Timer.Text, view.Timer.TextColor3 = tostring(math.ceil(entry.EndsAt - now)) .. "s", ink
+			view.Id = entry.Id
+		end
+	end
+	self.ActiveCount = #active
+	self.Stack.Size = UDim2.new(self.Stack.Size.X.Scale, self.Stack.Size.X.Offset, 0, shown > 0 and shown * 28 - 4 or 0)
+	self.Stack.Visible = shown > 0 and not self.Panel.Visible and not (self.Short and self.Touch and self.Toast.Visible)
+	local toastOffset = self.Short and self.Touch and 0 or (shown > 0 and shown * 28 + 3 or 0)
+	self.Toast.Position = UDim2.fromOffset(self.Stack.Position.X.Offset, self.Stack.Position.Y.Offset + toastOffset)
+end
+function UI:pressFeedback()
+	self.PressFeedbackEndsAt = workspace:GetServerTimeNow() + 0.22
 	self:tick(self.Nearby)
 end
 function UI:spectating(name, index, total)
@@ -381,7 +432,7 @@ function UI:tick(nearby)
 	self.Queue.Text = queued and "QUEUED  ·  LEAVE" or "JOIN ROUND"
 	self.Queue.BackgroundColor3 = queued and palette.GoldPale or palette.Teal
 	self.Queue.TextColor3 = queued and palette.Gold or palette.White
-	local remaining = math.max(0, (state.ReadyAt or 0) - now)
+	local remaining = math.max(0, math.max(state.ReadyAt or 0, attr("PrivatePressReadyAt") or 0) - now)
 	local character = Players.LocalPlayer.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 	local alive = humanoid and humanoid.Health > 0
@@ -389,10 +440,14 @@ function UI:tick(nearby)
 	self.Press.Active, self.Press.Selectable = self.CanPress, self.CanPress
 	self.Press.AutoButtonColor = self.CanPress
 	if state.SuddenDeath then self.Press.Text = "SURVIVE THE STORM"
-	elseif remaining > 0 then self.Press.Text = "NEXT PRESS  " .. tostring(math.ceil(remaining)) .. "s"
-	else self.Press.Text = self.Touch and "PRESS FOR CHAOS" or "PRESS  [E / X]" end
+	elseif remaining > 0 then self.Press.Text = "NEXT PRESS  " .. string.format("%.1f", remaining) .. "s"
+	else self.Press.Text = "PRESS  +" .. tostring(Config.PressTokens or 2) .. " TOKENS" .. (self.Touch and "" or "  [E / X]") end
 	self.Press.BackgroundColor3 = self.CanPress and palette.CoralButton or palette.Disabled
 	self.Press.TextColor3 = self.CanPress and palette.White or palette.Muted
+	local pop = (self.PressFeedbackEndsAt or 0) > now
+	if pop then self.Press.BackgroundColor3 = palette.CoralPale end
+	self.PressStroke.Thickness = pop and 2.5 or 1.2
+	self.PressStroke.Color = pop and palette.Coral or palette.Line
 	self.Actions.Visible = not self.Panel.Visible and (self.Press.Visible or self.Queue.Visible)
 	self.Hint.Text = ""
 	self.Hint.Visible = false
@@ -403,7 +458,7 @@ function UI:tick(nearby)
 		local personalInstructions = eventHint and eventHint ~= "" and not sameText(eventHint, state.EventDescription)
 		if personalInstructions then
 			self.EventDescription.Text = tostring(eventHint)
-		elseif state.EventStage ~= "Cooldown" then
+		else
 			self.EventDescription.Text = state.EventDescription or "Survive the chaos."
 		end
 		local specialRole = role and role ~= "" and role ~= "Survivor" and role ~= "Lobby" and role ~= "Spectator"
@@ -417,6 +472,15 @@ function UI:tick(nearby)
 	self.Hint.Visible = self.Hint.Text ~= ""
 	self.EventDescription.Size = UDim2.new(1, -34, 0, self.Phone and (self.Hint.Visible and 57 or 70) or (self.Hint.Visible and 42 or 50))
 	self.Health.Visible = inRound and not self.Panel.Visible
+	local personal = attr("PrivatePersonalHint")
+	local personalEndsAt = attr("PrivatePersonalEndsAt")
+	self.Personal.Visible = inRound and not self.Panel.Visible and type(personal) == "string" and personal ~= "" and type(personalEndsAt) == "number" and personalEndsAt > now
+	if self.Personal.Visible then self.PersonalText.Text = personal end
+	self:renderActiveEvents(now)
+	if phase == "Round" then
+		local livingText = state.RoundMode == "Solo survival" and "SOLO" or (self.Phone and tostring(state.AliveCount or 0) .. " alive" or tostring(state.AliveCount or 0) .. " / " .. tostring(state.RoundPlayers or 0) .. " alive")
+		self.RoundInfo.Text = livingText .. (self.ActiveCount > 0 and (" · " .. self.ActiveCount .. " hazards") or "")
+	end
 	if humanoid then
 		local fraction = math.clamp(humanoid.Health / math.max(1, humanoid.MaxHealth), 0, 1)
 		self.HealthLabel.Text = "HP " .. tostring(math.ceil(math.max(0, humanoid.Health)))
@@ -433,7 +497,8 @@ function UI:toast(message, kind)
 	self.ToastText.Text = message
 	self.ToastText.TextColor3 = kind == "good" and palette.Teal or (kind == "bad" and palette.CoralInk or palette.Ink)
 	self.Toast.BackgroundColor3 = kind == "good" and palette.TealPale or (kind == "bad" and palette.CoralPale or palette.Paper)
-	task.delay(4.5, function() if self.ToastToken == token then self.Toast.Visible = false end end)
+	self:renderActiveEvents(workspace:GetServerTimeNow())
+	task.delay(4.5, function() if self.ToastToken == token then self.Toast.Visible = false; self:renderActiveEvents(workspace:GetServerTimeNow()) end end)
 end
 function UI:leaders(entries, labelText)
 	self.Entries = entries or {}

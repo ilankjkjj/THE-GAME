@@ -4,6 +4,21 @@
 local Environment = require('../scripts/RobloxEnvironment')
 local roblox = require('@lune/roblox')
 local env = Environment.new()
+local forcedRandomInteger
+local originalRandom = env.Env.Random.new
+env.Env.Random.new = function()
+ local generator = originalRandom()
+ local nextInteger = generator.NextInteger
+ generator.NextInteger = function(self,low,high)
+  if forcedRandomInteger then
+   local selected=forcedRandomInteger; forcedRandomInteger=nil
+   assert(selected>=low and selected<=high,'invalid deterministic random choice')
+   return selected
+  end
+  return nextInteger(self,low,high)
+ end
+ return generator
+end
 env.Env.PhysicalProperties = roblox.PhysicalProperties
 env.Env.NumberSequenceKeypoint = roblox.NumberSequenceKeypoint
 env.Env.RaycastParams = env.Env.RaycastParams or { new = function() return {} end }
@@ -68,13 +83,15 @@ local function advance(seconds)
 end
 world = env.load('src/server/World.luau').build()
 local events = env.load('src/server/Events.luau')
-assert(#events.Definitions == 41)
+assert(#events.Definitions == 52)
 local eventIds = {}
 for _, event in ipairs(events.Definitions) do
  assert(not eventIds[event.Id], 'duplicate event ID'); eventIds[event.Id]=true
  assert(event.Duration>=12 and event.Duration<=30, 'event duration')
  assert(table.find({'Disaster','Challenge','Relief','PvP'},event.Category),'category metadata')
  assert(event.Intensity>=1 and event.Intensity<=3,'intensity metadata')
+ assert(table.find({'ArenaHazard','PvP','Relief','Targeted','MapMutation'},event.Channel),'stack channel metadata')
+ assert(type(event.ConflictKeys)=='table' and event.VisualBudget>=0 and event.VisualBudget<=220,'stack budget metadata')
  assert(table.find({'eruption','storm','impact','sciFi','warning','chase','relief','gunshot','sword','role','supply'},event.Cue),'cue metadata')
  local chosen=events.choose(1,event.Id,10)
  assert(chosen and chosen.MinPlayers<=1 and chosen.Id~=event.Id,'player/repeat filtering')
@@ -105,6 +122,7 @@ for index=1,3 do table.insert(players, makePlayer(index, world.ArenaSpawns[index
 local lobbyPlayer=makePlayer(99, world.LobbySpawn)
 local roundActive=true
 local attackers={}
+local personalHints={}
 local context={
  World=world, State={}, Remotes={}, Active=function() return roundActive end,
  Players=function()
@@ -115,6 +133,11 @@ local context={
  Damage=function(player,amount,attacker) assert(player~=lobbyPlayer,'lobby damage'); attackers[player]=attacker; damages[player]=(damages[player] or 0)+amount; player.Character.Humanoid.Health=math.max(0,player.Character.Humanoid.Health-amount) end,
  Eliminate=function(player) assert(player~=lobbyPlayer,'lobby elimination'); alive[player]=false; player.Character.Humanoid.Health=0 end,
  SetRole=function(player,role) assert(player~=lobbyPlayer,'lobby role'); roles[player]=role end,
+ PersonalHint=function(player,hint,duration)
+  assert(player~=lobbyPlayer and type(hint)=='string' and #hint>0,'personal hint must be private to a survivor')
+  assert(duration>0 and duration<=8,'personal duration must stay short')
+  personalHints[player]={Hint=hint,Duration=duration}
+ end,
  Cue=function(kind,position,strength)
   assert(position.X<180,'cue should never originate inside lobby')
   assert(type(kind)=='string' and strength>0 and strength<=3,'cue payload')
@@ -127,10 +150,11 @@ local context={
  end,
 }
 local function reset()
+ world.resetArena()
  t,jobs,errors,canceled=0,{},{},{}
  roundActive=true; alive,awards,damages,roles={},{},{},{}
  peakParts,cues,stages=0,{},{}
- obstruction=nil; attackers={}
+ obstruction=nil; attackers={}; personalHints={}; forcedRandomInteger=nil
  for index,player in ipairs(players) do
   alive[player]=true; player.Character.Humanoid.MaxHealth=100; player.Character.Humanoid.Health=100; player.Character.Humanoid.WalkSpeed=16; player.Character.Humanoid.JumpPower=50; player.Character.Humanoid.JumpHeight=7.2
   player.Character.HumanoidRootPart.Position=world.ArenaSpawns[index]
@@ -156,6 +180,10 @@ for _,definition in ipairs(events.Definitions) do
   assert(player.Character.Humanoid.MaxHealth==100,definition.Id..' armor leaked')
  end
  assert(env.Workspace.Gravity==originalGravity,definition.Id..' global gravity change')
+ if definition.Persistent then
+  assert(world.Houses[1].Model:GetAttribute('MutationCount')==1,definition.Id..' lost permanent house mutation')
+  world.resetArena()
+ end
  for part, properties in pairs(originals) do
   for property,value in pairs(properties) do assert(part[property]==value,definition.Id..' changed '..part.Name..'.'..property) end
   assert(part.CustomPhysicalProperties==properties.CustomPhysicalProperties,definition.Id..' physical properties leak')
@@ -166,7 +194,7 @@ for _,definition in ipairs(events.Definitions) do
  print('PASS runtime',definition.Id,'peak',peakParts,'parts')
 end
 assert(lobbyPlayer.Character.Humanoid.Health==100)
-print('All 41 scheduled events fit the mobile budget, cancel, restore, and exclude lobby participants.')
+print('All 52 scheduled events fit the mobile budget, cancel, restore, and exclude lobby participants.')
 
 
 
@@ -430,4 +458,182 @@ assert(#players[2].Backpack:GetChildren()==0 and #players[3].Backpack:GetChildre
 cleanup()
 assert(players[1].Character.Humanoid.MaxHealth==100 and players[1].Character.Humanoid.Health<=100,'temporary battle armor leaked')
 print('PASS random battle kit grants two weapons and restores temporary armor')
-print('67 event checks passed. Movement, physics, input and multiplayer need Studio playtests.')
+
+local Director=env.load('src/shared/DisasterDirector.luau')
+assert(not Director.compatible(definition('blaster_brawl'),{definition('murder_mystery')}),'weapons/roles may not overlap')
+assert(not Director.compatible(definition('flash_flood'),{definition('volcanic_eruption')}),'incompatible water levels may not overlap')
+assert(not Director.compatible(definition('meteor_shower'),{{Definition=definition('meteor_shower')}}),'same hazard selected twice')
+assert(Director.compatible(definition('meteor_shower'),{definition('free_swords'),definition('heavy_feet')}),'independent hazards were needlessly excluded')
+assert(not Director.compatible(definition('acid_rain'),{definition('volcanic_eruption'),definition('shockwaves'),definition('blaster_brawl')}),'stack visual budget exceeded')
+for _=1,20 do
+ local selected=events.choose(3,nil,4,{{Id='house_paint',Category='Challenge'}},{definition('volcanic_eruption'),definition('murder_mystery')})
+ assert(selected and Director.compatible(selected,{definition('volcanic_eruption'),definition('murder_mystery')}),'selection ignores active scopes')
+end
+print('PASS stack director rejects duplicate IDs, conflicting channels and excessive combined visuals')
+
+reset()
+local lower=definition('slippery_islands').Run(context,players[1])
+local upper=definition('blizzard').Run(context,players[1])
+assert(world.Platforms[1].Material==roblox.Enum.Material.Snow,'upper surface lease did not apply')
+lower()
+assert(world.Platforms[1].Material==roblox.Enum.Material.Snow,'older event erased newer snow')
+upper()
+assert(world.Platforms[1].Material==originals[world.Platforms[1]].Material,'last surface lease did not restore original')
+reset()
+lower=definition('slippery_islands').Run(context,players[1]); upper=definition('blizzard').Run(context,players[1]); upper()
+assert(world.Platforms[1].Material==roblox.Enum.Material.Ice,'newer scope did not restore still-active ice')
+lower(); assert(world.Platforms[1].Material==originals[world.Platforms[1]].Material,'surface stack left a stale original')
+print('PASS property leases clean in either order without erasing another active event')
+
+reset()
+local roleCleanup=definition('cops_robbers').Run(context,players[1])
+local newerRoles=definition('free_swords').Run(context,players[1])
+roleCleanup()
+assert(roles[players[1]]=='Swordfighter','older role cleanup cleared a newer role')
+newerRoles(); assert(roles[players[1]]==nil,'last role scope leaked')
+reset()
+local firstHint=definition('rocket_boots').Run(context,players[1])
+local secondHint=definition('heavy_feet').Run(context,players[1])
+local bootsHint='ROCKET BOOTS: Your jumps are much stronger. Aim for solid ground!'
+secondHint(); assert(players[1]:GetAttribute('EventHint')==bootsHint,'private hint failed to restore still-active instructions')
+firstHint(); assert(players[1]:GetAttribute('EventHint')==nil,'private hint lease leaked')
+print('PASS role and hint ownership preserve other active scope instructions')
+
+for index=1,8 do
+ reset(); players[1].Character.Humanoid.Health=60; forcedRandomInteger=index
+ local personal,duration,text=events.runPersonal(context,players[1])
+ assert(type(personal)=='function' and duration>=2 and duration<=8 and #text>0,'personal runner contract')
+ assert(personalHints[players[1]] and personalHints[players[2]]==nil,'personal consequence leaked to another player')
+ local humanoid=players[1].Character.Humanoid
+ if index==1 then assert(awards[players[1]]==8,'personal token bonus failed')
+ elseif index==2 then assert(humanoid.Health==80,'personal healing failed')
+ elseif index==3 then assert(humanoid.WalkSpeed==23,'personal speed failed')
+ elseif index==4 then assert(humanoid.JumpPower==68 and humanoid.JumpHeight>10,'personal jump failed')
+ elseif index==5 then
+  assert(players[1].Character:FindFirstChild('EventPersonalShield'),'personal protection failed')
+  humanoid:TakeDamage(25); assert(humanoid.Health==60,'personal forcefield did not protect health')
+ elseif index==6 then assert(humanoid.WalkSpeed==11,'personal slow failed')
+ elseif index==7 then assert(humanoid.Health==52,'personal sting failed')
+ elseif index==8 then assert(world.Effects:FindFirstChild('PersonalMark',true),'personal mark failed') end
+ personal(); personal(); advance(duration+1)
+ assert(humanoid.WalkSpeed==16 and humanoid.JumpPower==50,'personal movement cleanup failed')
+ assert(not players[1].Character:FindFirstChild('EventPersonalShield') and #world.Effects:GetChildren()==0,'personal resource leak')
+end
+assert(select(2,events.runPersonal(context,lobbyPlayer))==0,'lobby press got a personal consequence')
+print('PASS all eight personal consequences, private hints, cleanup and lobby rejection')
+
+reset()
+local speed=definition('speed_frenzy').Run(context,players[1]); forcedRandomInteger=3
+local personal=events.runPersonal(context,players[1])
+assert(players[1].Character.Humanoid.WalkSpeed==36,'personal boost did not stack over major speed')
+speed(); assert(players[1].Character.Humanoid.WalkSpeed==36,'major cleanup erased active personal boost')
+personal(); assert(players[1].Character.Humanoid.WalkSpeed==16,'personal restored an expired major boost')
+reset()
+speed=definition('speed_frenzy').Run(context,players[1]); forcedRandomInteger=3; personal=events.runPersonal(context,players[1])
+personal(); assert(players[1].Character.Humanoid.WalkSpeed==29,'personal cleanup erased active major boost')
+speed(); assert(players[1].Character.Humanoid.WalkSpeed==16,'major speed leaked after personal cleanup')
+print('PASS personal and major movement leases expire safely in either order')
+
+reset()
+local themeCalls=0; local originalTheme=world.theme
+world.theme=function() themeCalls+=1 end
+local storm=definition('blizzard').Run(context,players[1]); storm()
+assert(themeCalls==0,'event scope owns global world lighting')
+world.theme=originalTheme
+print('PASS event scopes leave global lighting to the active-event manager')
+
+for _,kind in ipairs({'lift','relocate','shrink','tilt','paint'}) do
+ reset()
+ local house=world.Houses[1]
+ local original={}
+ for _,part in ipairs(house.Model:GetDescendants()) do if part:IsA('BasePart') then original[part]={CFrame=part.CFrame,Size=part.Size,Color=part.Color} end end
+ local houseCleanup=definition('house_'..kind).Run(context,players[1])
+ advance(2.4); assert(house.Model:GetAttribute('MutationCount')==0,'house transformation ignored warning')
+ advance(0.2); assert(house.Model:GetAttribute('MutationCount')==1,'warned house did not transform')
+ local changed=false
+ for part,properties in pairs(original) do if part.CFrame~=properties.CFrame or part.Size~=properties.Size or part.Color~=properties.Color then changed=true end end
+ assert(changed,'house mutation had no visible effect')
+ houseCleanup(); assert(house.Model:GetAttribute('MutationCount')==1,'house change disappeared at event expiry')
+ local vanish=definition('vanishing_islands').Run(context,players[1]); advance(4.2); vanish()
+ for part,properties in pairs(world.RoundOriginals) do
+  if part:IsDescendantOf(house.Model) then assert(part.CFrame==properties.CFrame and part.Size==properties.Size and part.Color==properties.Color,'transient cleanup erased house mutation') end
+ end
+ world.resetArena()
+ for part,properties in pairs(original) do assert(part.CFrame==properties.CFrame and part.Size==properties.Size and part.Color==properties.Color,'round reset kept house mutation') end
+end
+print('PASS all five house transformations warn, stay for the round, survive temporary hazards and reset at round end')
+
+reset()
+cleanup=definition('iron_survivor').Run(context,players[1])
+assert(players[1].Character.Humanoid.MaxHealth==160 and players[1].Character.Humanoid.Health==160,'iron armor not granted')
+assert(players[2].Character.Humanoid.MaxHealth==100,'random armor granted to everyone')
+cleanup(); assert(players[1].Character.Humanoid.MaxHealth==100 and players[1].Character.Humanoid.Health==100,'iron armor did not restore')
+print('PASS targeted iron armor changes health capacity and restores safely')
+reset()
+cleanup=definition('rocket_boots').Run(context,players[1])
+assert(players[1].Character.Humanoid.JumpPower==76 and players[1].Character.Humanoid.JumpHeight==13 and players[1].Character.Humanoid.WalkSpeed==23,'rocket boots do not enhance movement')
+alive[players[1]]=false; advance(0.2)
+assert(players[1].Character.Humanoid.JumpPower==50 and players[1].Character.Humanoid.WalkSpeed==16,'rocket boots entered lobby')
+cleanup(); print('PASS targeted rocket boots release immediately when player leaves the arena')
+reset()
+cleanup=definition('heavy_feet').Run(context,players[1]); advance(2.9)
+assert(players[1].Character.Humanoid.WalkSpeed==16,'handicap ignored preparation time')
+advance(0.2); assert(players[1].Character.Humanoid.WalkSpeed==9,'handicap failed to activate')
+advance(14.1); assert(awards[players[1]]==15,'surviving handicap was not rewarded')
+cleanup(); assert(players[1].Character.Humanoid.WalkSpeed==16,'handicap leaked')
+print('PASS concrete shoes give preparation time and reward surviving the handicap')
+reset()
+players[1].Character.HumanoidRootPart.Position=roblox.Vector3.new(0,34,0)
+cleanup=definition('hunter_drone').Run(context,players[1]); advance(3.2)
+assert(world.Effects:FindFirstChild('Incomingbomb',true),'hunter drone failed to telegraph its target')
+players[1].Character.HumanoidRootPart.Position=roblox.Vector3.new(10,34,0)
+advance(2.3); assert(players[1].Character.Humanoid.Health==100,'drone hit survivor after successful dodge')
+advance(3.8); assert(players[1].Character.Humanoid.Health<100,'drone did not punish standing in next target')
+cleanup(); print('PASS personal hunter drone locks old positions and rewards movement')
+reset()
+face(players[1],roblox.Vector3.new(0,34,0),roblox.Vector3.new(0,34,-15))
+face(players[2],roblox.Vector3.new(0,34,-15),roblox.Vector3.new(0,34,0))
+cleanup=definition('gifted_railgun').Run(context,players[1]); local railgun=equipped(players[1],'Gifted Rail Blaster'); advance(3.2)
+railgun.Activated:Fire(); assert(players[2].Character.Humanoid.Health==30 and attackers[players[2]]==players[1],'railgun must be usable server-authoritative gear')
+assert(not players[2].Backpack:FindFirstChildOfClass('Tool'),'railgun gift went to multiple survivors')
+cleanup(); print('PASS targeted railgun grants usable high-damage gear with attribution')
+reset()
+players[1].Character.HumanoidRootPart.Position=roblox.Vector3.new(0,34,0)
+cleanup=definition('jackpot_runner').Run(context,players[1])
+players[1].Character.HumanoidRootPart.Position=roblox.Vector3.new(6,34,0); advance(3.2)
+players[1].Character.HumanoidRootPart.Position=roblox.Vector3.new(12,34,0); advance(1.1)
+assert(awards[players[1]]==6,'jackpot did not reward movement')
+advance(3.2); assert(players[1].Character.Humanoid.Health<100,'jackpot did not punish camping')
+cleanup(); print('PASS jackpot rewards distance traveled and punishes standing still')
+
+reset()
+local eruption=definition('volcanic_eruption').Run(context,players[1])
+local rings=definition('shockwaves').Run(context,players[1])
+local gear=definition('blaster_brawl').Run(context,players[1])
+advance(13); observe()
+eruption(); local survivingParts=#world.Effects:GetDescendants(); assert(survivingParts>0,'one cleanup destroyed other hazard scopes')
+advance(1); gear(); rings()
+assert(#world.Effects:GetChildren()==0 and #errors==0,'stacked hazards leaked or raised a late error')
+print('PASS simultaneous eruption, shockwaves and PvP stay bounded and clean independently')
+reset()
+players[1]:SetAttribute('HouseIndex',7)
+local assignedHouse=definition('house_lift').Run(context,players[1])
+assert(stages[1]=='Warning','house warning was overwritten with Active immediately')
+advance(2.6)
+assert(world.Houses[7].Model:GetAttribute('MutationCount')==1 and world.Houses[1].Model:GetAttribute('MutationCount')==0,'mutation targeted vacant house instead of live assigned house')
+assignedHouse(); players[1]:SetAttribute('HouseIndex',nil)
+print('PASS house mutations target an actual survivor\'s assigned house and preserve the warning phase')
+reset()
+players[1].Character.HumanoidRootPart.Position=roblox.Vector3.new(0,34,0)
+players[2].Character.HumanoidRootPart.Position=roblox.Vector3.new(10,34,0)
+players[3].Character.HumanoidRootPart.Position=roblox.Vector3.new(25,34,0)
+lobbyPlayer.Character.HumanoidRootPart.Position=roblox.Vector3.new(0,34,0)
+local overloadCleanup=events.Overload.Run(context,players[1])
+assert(events.Overload.Instant and events.Overload.Duration==0.5 and not eventIds.button_overload,'overload entered normal random selection')
+assert(players[1].Character.Humanoid.Health==86 and players[2].Character.Humanoid.Health==90 and players[3].Character.Humanoid.Health==100,'overload damages wrong participants/range')
+assert(lobbyPlayer.Character.Humanoid.Health==100 and #jobs==0 and #world.Effects:GetChildren()==0,'overload affects lobby or starts delayed work')
+overloadCleanup(); advance(10)
+assert(players[1].Character.Humanoid.Health==86,'overload has lingering damage')
+lobbyPlayer.Character.HumanoidRootPart.Position=world.LobbySpawn
+print('PASS instantaneous button overload damages nearby survivors once, excludes lobby and schedules no work')
+print('94 event checks passed. Movement, physics, input and multiplayer need Studio playtests.')

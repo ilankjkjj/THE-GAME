@@ -89,7 +89,7 @@ test("Shared phase instructions are not repeated as role hints or event toasts",
 	ui:tick(true); assert(ui.EventDescription.Text == attributes.EventHint and ui.Hint.Text == "COP")
 	attributes.EventHint, attributes.Role = nil, "Survivor"
 	input.TouchEnabled = false; env.viewport(1268, 572); ui:resize()
-	assert(ui.EventTitle.TextSize == 15 and ui.EventDescription.TextSize == 13 and ui.NavButtons[1].TextSize == 13)
+	assert(ui.EventTitle.TextSize == 15 and ui.EventDescription.TextSize == 13 and ui.NavButtons[1].TextSize == 12)
 	assert(ui.Event.Size.X.Offset == 340 and ui.Event.Size.Y.Offset == 96 and ui.EventDescription.Size.Y.Offset == 50)
 end)
 test("Owner-only instructions override public hints without repeating a shared instruction", function()
@@ -102,12 +102,49 @@ test("Owner-only instructions override public hints without repeating a shared i
 	assert(ui.EventDescription.Text == state.EventDescription and not ui.Hint.Visible)
 	attributes.PrivateRole, attributes.PrivateHint = nil, nil
 end)
-test("The classic supplies shop uses Tokens and enforces stock and lobby availability", function()
+test("Stacked hazard clocks never delay a ready button and personal press throttles are independent", function()
+	state.ActiveEvents = {
+		{ Id = 1, Name = "LAVA RISING", EndsAt = 135, Category = "Disaster", Intensity = 3 },
+		{ Id = 2, Name = "LOW GRAVITY", EndsAt = 120, Category = "Relief", Intensity = 1 },
+		{ Id = 3, Name = "COPS AND ROBBERS", EndsAt = 128, Category = "Role", Intensity = 2 },
+	}
+	env.time(100); state.ReadyAt = 100.9; attributes.PrivatePressReadyAt = 101.4
+	ui:state(state); ui:tick(true)
+	assert(ui.Stack.Visible and ui.ActiveCount == 3 and ui.ActiveCards[1].Name.Text == "LOW GRAVITY" and ui.ActiveCards[1].Timer.Text == "20s")
+	env.time(101); ui:tick(true); assert(not ui.CanPress and ui.ActiveCount == 3)
+	env.time(101.5); ui:tick(true)
+	assert(ui.CanPress and ui.Press.Text:find("%+2 TOKENS") and ui.ActiveCount == 3)
+	env.time(121); ui:tick(true); assert(ui.CanPress and ui.ActiveCount == 2 and ui.ActiveCards[1].Name.Text == "COPS AND ROBBERS")
+	ui:open("Shop"); assert(not ui.Stack.Visible); ui:close(); assert(ui.Stack.Visible)
+	for _, size in ipairs({ { 390, 844, true }, { 844, 390, true } }) do
+		input.TouchEnabled = size[3]; env.viewport(size[1], size[2]); ui:resize()
+		assert(not overlap(rect(ui.Stack, size[1], size[2]), rect(ui.Navigation, size[1], size[2])))
+	end
+	state.ActiveEvents = {}; state.ReadyAt = 0; attributes.PrivatePressReadyAt = nil
+	env.time(100); input.TouchEnabled = false; env.viewport(1280, 720); ui:resize(); ui:tick(true)
+	assert(not ui.Stack.Visible)
+end)
+test("Personal side effects expire and stay separate from role and hazard instructions", function()
+	attributes.PrivatePersonalHint = "+2 Tokens! Low gravity for 8 seconds."
+	attributes.PrivatePersonalEndsAt = 108
+	attributes.PrivateHint = "Catch the red robber"; attributes.PrivateRole = "Cop"
+	ui:tick(true)
+	assert(ui.Personal.Visible and ui.PersonalText.Text == attributes.PrivatePersonalHint and ui.EventDescription.Text == attributes.PrivateHint and ui.Hint.Text == "COP")
+	for _, size in ipairs({ { 390, 844, true }, { 844, 390, true }, { 1280, 720, false } }) do
+		input.TouchEnabled = size[3]; env.viewport(size[1], size[2]); ui:resize()
+		assert(not overlap(rect(ui.Personal, size[1], size[2]), rect(ui.Navigation, size[1], size[2])))
+		assert(not overlap(rect(ui.Personal, size[1], size[2]), rect(ui.Actions, size[1], size[2])))
+	end
+	env.time(108); ui:tick(true); assert(not ui.Personal.Visible and ui.EventDescription.Text == attributes.PrivateHint)
+	attributes.PrivatePersonalHint, attributes.PrivatePersonalEndsAt, attributes.PrivateHint, attributes.PrivateRole = nil, nil, nil, nil
+	env.time(100); input.TouchEnabled = false; env.viewport(1280, 720); ui:resize()
+end)
+test("The rounded supplies shop uses Tokens and enforces stock and lobby availability", function()
 	attributes.InRound = false
 	local data = Profile.new(100)
 	ui:profile(data, false); ui:open("Shop")
 	assert(ui.Tokens.Text == "100 Tokens" and ui.Balance.Text == "YOUR TOKENS: 100" and #ui.NavButtons == 3)
-	assert(ui.EventTitle.Font == roblox.Enum.Font.SourceSansBold)
+	assert(ui.EventTitle.FontFace.Family:find("BuilderSans") and ui.Event:FindFirstChildOfClass("UICorner").CornerRadius.Offset == 12)
 	local function medkitBuy() return ui.List:FindFirstChild("medkit"):FindFirstChild("Buy") end
 	assert(medkitBuy().Active and medkitBuy().Text == "BUY  30 TOKENS")
 	medkitBuy().Activated:Fire(); assert(purchase[1] == "Buy" and purchase[2] == "medkit")
@@ -193,6 +230,17 @@ test("Stale, distant and lobby cues cannot shake the camera or add sounds", func
 	feedback:cue({ Kind = "impact", RoundId = 4, Position = roblox.Vector3.new(220, 14, 0), Strength = 1 })
 	attributes.InRound = false; feedback:cue({ Kind = "impact", RoundId = 4, Strength = 1 }); attributes.InRound = true
 	assert(feedback.Shake == 0 and feedback.Flash == 0 and soundCount() == before)
+end)
+test("A press has a short bounded camera punch and restores the original transform", function()
+	feedback.Shake, feedback.Punch, feedback.Flash = 0, 0, 0
+	feedback:cue({ Kind = "press", RoundId = 4, Position = root.Position, Strength = 1 })
+	assert(feedback.Punch > 0 and feedback.Punch <= 0.22)
+	for _ = 1, 120 do
+		clock += 0.016; feedback:step(0.016)
+		assert((camera.CFrame.Position - original.Position).Magnitude < 0.6)
+		feedback:removeOffset(); assert((camera.CFrame.Position - original.Position).Magnitude < 0.0001)
+	end
+	assert(feedback.Punch == 0 and feedback.Shake == 0)
 end)
 test("Press audio uses the catalog and cosmetic overrides no longer affect playback", function()
 	clock += 1
@@ -319,12 +367,18 @@ test("Main client cycles living spectators, handles respawns and disconnects on 
 	assert(not attributes.PrivateRole and not attributes.PrivateHint)
 	network.PrivateState.OnClientEvent:Fire({ RoundId = 9, Role = "Sheriff", Hint = "Find the murderer" })
 	assert(attributes.PrivateRole == "Sheriff" and attributes.PrivateHint == "Find the murderer")
+	network.PrivateState.OnClientEvent:Fire({ RoundId = 9, PressReadyAt = 101.4 })
+	network.PrivateState.OnClientEvent:Fire({ RoundId = 9, PersonalHint = "+2 Tokens! Super jump for 8 seconds.", PersonalEndsAt = 108 })
+	assert(attributes.PrivatePressReadyAt == 101.4 and attributes.PrivatePersonalEndsAt == 108 and mainUI.Personal.Visible)
+	assert(attributes.PrivateHint == "Find the murderer" and attributes.PrivateRole == "Sheriff")
+	network.PrivateState.OnClientEvent:Fire({ RoundId = 9, PersonalHint = false })
+	assert(attributes.PrivatePersonalHint == nil and attributes.PrivatePersonalEndsAt == nil and attributes.PrivatePressReadyAt == 101.4)
 	network.PrivateState.OnClientEvent:Fire({ RoundId = 9, Hint = "Updated clue" })
 	assert(attributes.PrivateRole == "Sheriff" and attributes.PrivateHint == "Updated clue")
 	network.PrivateState.OnClientEvent:Fire({ RoundId = 9, Role = false })
 	assert(attributes.PrivateRole == nil and attributes.PrivateHint == "Updated clue")
 	network.PrivateState.OnClientEvent:Fire({ Clear = true })
-	assert(attributes.PrivateRole == nil and attributes.PrivateHint == nil)
+	assert(attributes.PrivateRole == nil and attributes.PrivateHint == nil and attributes.PrivatePressReadyAt == nil and attributes.PrivatePersonalHint == nil)
 	network.PrivateState.OnClientEvent:Fire({ RoundId = 9, Role = "Murderer", Hint = "Secret" })
 	attributes.InRound = false; inRoundChanged:Fire()
 	assert(attributes.PrivateRole == nil and attributes.PrivateHint == nil)

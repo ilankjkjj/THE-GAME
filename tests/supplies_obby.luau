@@ -277,6 +277,32 @@ local function obbyHarness()
 	return h
 end
 
+test("Stacked event boosts restore their baseline while a supply overlay retains only its remaining duration", function()
+	local h=harness({soda=1});h.Supplies:grant(h.Player,11);h.equip("soda").Activated:Fire()
+	h.World=h.Env.load("src/server/World.luau").build()
+	h.Env.Env.Random.new=function()return {NextInteger=function()return 3 end,NextNumber=function(_,low,high)return ((low or 0)+(high or 1))/2 end}end
+	local events=h.Env.load("src/server/Events.luau")
+	local ctx={World=h.World,Players=function()return {h.Player}end,IsAlive=function()return true end,Active=function()return true end,SetRole=function()end,Damage=function()end}
+	local speed
+	for _,event in ipairs(events.Definitions)do if event.Id=="speed_frenzy"then speed=event end end
+	h.Supplies:suspend(h.Player);local cleanup=speed.Run(ctx,h.Player);h.Supplies:reapply(h.Player)
+	eq(h.Humanoid.WalkSpeed,35)
+	h.Supplies:suspend(h.Player);local personal=events.runPersonal(ctx,h.Player);h.Supplies:reapply(h.Player)
+	eq(h.Humanoid.WalkSpeed,42)
+	h.Supplies:suspend(h.Player);cleanup();h.Supplies:reapply(h.Player)
+	eq(h.Humanoid.WalkSpeed,42)
+	h.Supplies:suspend(h.Player);personal();h.Supplies:reapply(h.Player)
+	eq(h.Humanoid.WalkSpeed,Config.BaseWalkSpeed+6)
+	h.advance(8);h.Supplies:update();eq(h.Humanoid.WalkSpeed,Config.BaseWalkSpeed)
+end)
+
+test("A suspended supply expires without turning an event's equal-valued speed into its former baseline", function()
+	local h=harness({soda=1});h.Supplies:grant(h.Player,11);h.equip("soda").Activated:Fire()
+	h.Supplies:suspend(h.Player);h.Supplies:suspend(h.Player);eq(h.Humanoid.WalkSpeed,Config.BaseWalkSpeed)
+	h.Humanoid.WalkSpeed=Config.BaseWalkSpeed+6 -- An independent event's base happens to equal the old overlay.
+	h.advance(8);h.Supplies:reapply(h.Player);eq(h.Humanoid.WalkSpeed,Config.BaseWalkSpeed+6)
+end)
+
 test("Obby exposes ten ordered physical checkpoints and a distinct finish", function()
 	local h = obbyHarness()
 	eq(#h.World.ObbyCheckpoints, 10)

@@ -1,5 +1,21 @@
 -- Keeps the event bank varied while shifting toward major disasters late in a round.
 local Director = {}
+local function definition(value)
+	return value.Definition or value.Event or value
+end
+function Director.compatible(event, activeDefinitions)
+	local budget = event.VisualBudget or 30
+	local keys = {}
+	for _, key in ipairs(event.ConflictKeys or {}) do keys[key] = true end
+	for _, active in ipairs(activeDefinitions or {}) do
+		local running = definition(active)
+		if running.Id == event.Id then return false end
+		budget += running.VisualBudget or 30
+		for _, key in ipairs(running.ConflictKeys or {}) do if keys[key] then return false end end
+	end
+	-- Reserve room for personal effects, muzzle flashes and player gear.
+	return budget <= 220
+end
 function Director.weight(event, threat, lastCategory)
 	local intensity = math.clamp(event.Intensity or 1, 1, 3)
 	local weight = event.Weight or 1
@@ -17,7 +33,7 @@ function Director.weight(event, threat, lastCategory)
 	end
 	return math.max(0.001, weight)
 end
-function Director.select(definitions, aliveCount, threat, history, random)
+function Director.select(definitions, aliveCount, threat, history, random, activeDefinitions)
 	if aliveCount <= 0 then return nil end
 	history = history or {}
 	local recent = {}
@@ -26,7 +42,7 @@ function Director.select(definitions, aliveCount, threat, history, random)
 	local function candidates(avoidRecent, openingDisaster)
 		local choices, total = {}, 0
 		for _, event in ipairs(definitions) do
-			if aliveCount >= (event.MinPlayers or 1) and (not avoidRecent or not recent[event.Id])
+			if aliveCount >= (event.MinPlayers or 1) and Director.compatible(event, activeDefinitions) and (not avoidRecent or not recent[event.Id])
 				and (not last or event.Id ~= last.Id) and (not openingDisaster or event.Category == "Disaster" or event.Category == "PvP") then
 				local weight = Director.weight(event, threat, last and last.Category)
 				table.insert(choices, { Event = event, Weight = weight }); total += weight
@@ -43,7 +59,7 @@ function Director.select(definitions, aliveCount, threat, history, random)
 	return choices[#choices].Event
 end
 function Director.remember(history, event)
-	table.insert(history, { Id = event.Id, Category = event.Category })
+	table.insert(history, { Id = event.Id, Category = event.Category, Channel = event.Channel })
 	while #history > 4 do table.remove(history, 1) end
 end
 return table.freeze(Director)

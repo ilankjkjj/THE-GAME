@@ -15,8 +15,17 @@ function Supplies:clear(player)
 	local humanoid = session.Character:FindFirstChildOfClass("Humanoid")
 	if humanoid then
 		for property, change in pairs(session.Buffs) do
-			if humanoid[property] == change.Value then humanoid[property] = change.Previous end
+			if not change.Suspended and humanoid[property] == change.Value then humanoid[property] = change.Previous end
 		end
+	end
+end
+function Supplies:suspend(player)
+	local session = self.Sessions[player]
+	local humanoid = session and session.Character:FindFirstChildOfClass("Humanoid")
+	if not humanoid then return end
+	for property, change in pairs(session.Buffs) do
+		if not change.Suspended and humanoid[property] == change.Value then humanoid[property] = change.Previous end
+		change.Suspended = true
 	end
 end
 function Supplies:reapply(player)
@@ -25,12 +34,13 @@ function Supplies:reapply(player)
 	if not humanoid then return end
 	for property, change in pairs(session.Buffs) do
 		if workspace:GetServerTimeNow() >= change.Expires then
-			if humanoid[property] == change.Value then humanoid[property] = change.Previous end
+			if not change.Suspended and humanoid[property] == change.Value then humanoid[property] = change.Previous end
 			session.Buffs[property] = nil
-		elseif humanoid[property] ~= change.Value and humanoid[property] > 0 then
+		elseif (change.Suspended or humanoid[property] ~= change.Value) and humanoid[property] > 0 then
 			change.Previous = humanoid[property]
 			change.Value = change.Previous + change.Amount
 			humanoid[property] = change.Value
+			change.Suspended = false
 		end
 	end
 end
@@ -40,7 +50,7 @@ function Supplies:update()
 		local humanoid = session.Character:FindFirstChildOfClass("Humanoid")
 		if not humanoid then continue end
 		for property, change in pairs(session.Buffs) do
-			if workspace:GetServerTimeNow() >= change.Expires and humanoid[property] == change.Value then
+			if workspace:GetServerTimeNow() >= change.Expires and not change.Suspended and humanoid[property] == change.Value then
 				humanoid[property] = change.Previous
 				session.Buffs[property] = nil
 			end
@@ -91,7 +101,7 @@ function Supplies:grant(player, roundId)
 				local change = { Previous = humanoid[property], Value = humanoid[property] + amount, Amount = amount, Expires = workspace:GetServerTimeNow() + 8 }
 				session.Buffs[property] = change; humanoid[property] = change.Value
 				task.delay(8, function()
-					if self.Sessions[player] == session and humanoid.Parent and humanoid[property] == change.Value then
+					if self.Sessions[player] == session and humanoid.Parent and not change.Suspended and humanoid[property] == change.Value then
 						humanoid[property] = change.Previous
 						if session.Buffs[property] == change then session.Buffs[property] = nil end
 					end

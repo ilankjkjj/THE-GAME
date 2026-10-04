@@ -135,10 +135,14 @@ test("The room constructs using valid Roblox classes and properties", function()
 	eq(#world.ArenaSpawns, 12); eq(#world.Platforms, 12)
 	assert(world.LobbySpawn.X > 150 and world.JoinPrompt)
 end)
-test("Classic houses fit players, roof stairs are absent and lobby spawns stay hidden", function()
+test("Smooth houses fit players, roof stairs are absent and lobby spawns stay hidden", function()
 	local spawns,parts=0,0
 	for _, instance in ipairs(world.Root:GetDescendants()) do
-		if instance:IsA("BasePart") then parts+=1 end
+		if instance:IsA("BasePart") then
+			parts+=1
+			eq(instance.TopSurface, roblox.Enum.SurfaceType.Smooth); eq(instance.BottomSurface, roblox.Enum.SurfaceType.Smooth)
+			if not instance:IsA("SpawnLocation") then eq(instance.Material, roblox.Enum.Material.SmoothPlastic) end
+		end
 		assert(not instance.Name:match("RoofStair") and instance.Name~="RoofLookoutDeck")
 		if instance:IsA("SpawnLocation") then spawns+=1; eq(instance.Transparency,1); eq(instance.CanCollide,false); eq(instance.CanTouch,false); eq(instance.CanQuery,false) end
 	end
@@ -146,6 +150,27 @@ test("Classic houses fit players, roof stairs are absent and lobby spawns stay h
 	for _, platform in ipairs(world.Platforms) do assert(platform.Size.X>=26 and platform.Size.Z>=26) end
 	eq(#world.ObbyCheckpoints,10); assert(world.ObbyFinish and world.ObbyStart)
 	for index,part in ipairs(world.ObbyCheckpoints) do eq(part:GetAttribute("ObbyOrder"),index); assert(part.CanCollide) end
+	eq(#world.Houses,12)
+	for _,house in ipairs(world.Houses) do
+		assert(house.Model:IsA("Model") and house.Model.PrimaryPart)
+		assert(house.Model:GetAttribute("DoorWidth")>=5.6 and house.Model:GetAttribute("DoorHeight")>=8)
+		assert(house.Model:GetAttribute("InteriorWidth")>=13 and house.Model:GetAttribute("InteriorHeight")>=9)
+	end
+end)
+test("Lobby terraces and ascending obby have reachable jumps within rescue bounds", function()
+	eq(#world.LobbyTerraces,5)
+	local low,high=math.huge,-math.huge
+	for _,part in ipairs(world.LobbyTerraces) do low=math.min(low,part.Position.Y); high=math.max(high,part.Position.Y) end
+	assert(high-low>=24)
+	local route=table.clone(world.ObbyCheckpoints); table.insert(route,world.ObbyFinish)
+	for index,part in ipairs(route) do
+		assert(part.Position.X>150 and part.Position.X<290 and math.abs(part.Position.Z)<65)
+		if index>1 then
+			local previous=route[index-1]; local difference=part.Position-previous.Position
+			assert(roblox.Vector3.new(difference.X,0,difference.Z).Magnitude<=10.01)
+			assert(difference.Y>0 and difference.Y<=3.5)
+		end
+	end
 end)
 test("World themes and lobby round displays restore correctly", function()
 	local original = world.Floor.Color
@@ -195,6 +220,44 @@ test("Arena resets restore temporary island changes", function()
 	platform.Size = roblox.Vector3.new(5, 3, 5); platform.Transparency = 1; platform.CanCollide = false
 	world.resetArena()
 	eq(platform.Size, size); eq(platform.Transparency, transparency); eq(platform.CanCollide, canCollide)
+end)
+test("Lasting house mutations survive transient cleanup and reset at round boundaries", function()
+	local house=world.Houses[1]; local floor=house.Model.PrimaryPart
+	local originalFrame,originalSize,originalColor=floor.CFrame,floor.Size,floor.Color
+	local platformFrame=house.Platform.CFrame
+	for _,kind in ipairs({"lift","relocate","shrink","tilt","paint"}) do assert(world.mutateHouse(1,kind)) end
+	assert(floor.CFrame~=originalFrame and floor.Size~=originalSize and floor.Color~=originalColor)
+	eq(house.Platform.CFrame,platformFrame)
+	assert(house.Model:GetAttribute("DoorWidth")>=5 and house.Model:GetAttribute("DoorHeight")>=7)
+	local changedFrame,changedSize,changedColor=floor.CFrame,floor.Size,floor.Color
+	floor.Transparency=1; floor.CanCollide=false
+	assert(world.mutateHouse(1,"paint")); changedColor=floor.Color
+	eq(world.RoundOriginals[floor].Transparency,0); eq(world.RoundOriginals[floor].CanCollide,true)
+	world.theme("Storm"); world.theme("Normal"); eq(floor.Color,changedColor)
+	floor.CFrame=originalFrame; floor.Size=originalSize
+	world.restoreTransientArena()
+	eq(floor.CFrame,changedFrame); eq(floor.Size,changedSize); eq(floor.Color,changedColor)
+	eq(floor.Transparency,0); eq(floor.CanCollide,true)
+	eq(world.resolveHouse(1),house); eq(world.resolveHouse(house.Platform.Position),house)
+	assert(not world.mutateHouse(0,"lift") and not world.mutateHouse(13,"paint") and not world.mutateHouse(1,"unknown"))
+	for _=1,20 do world.mutateHouse(1,"shrink"); world.mutateHouse(1,"lift") end
+	assert(house.State.Scale>=0.82 and house.State.Lift<=7.2)
+	assert(house.Model:GetAttribute("DoorWidth")>=4.59 and house.Model:GetAttribute("DoorHeight")>=6.56)
+	assert(house.EntranceRamp.Size.Y/house.EntranceRamp.Size.Z<1)
+	world.resetArena()
+	eq(floor.CFrame,originalFrame); eq(floor.Size,originalSize); eq(floor.Color,originalColor)
+	eq(house.Model:GetAttribute("MutationCount"),0); eq(house.Model:GetAttribute("DoorHeight"),8)
+end)
+test("Button squash, spring, pulse and spin recover after repeated presses", function()
+	local first=#environment.Delayed+1
+	world.press(roblox.Color3.fromRGB(255,91,108))
+	local staleReturn=environment.Delayed[first]
+	world.press(roblox.Color3.fromRGB(255,126,123))
+	local squashSize=world.Button.Size
+	staleReturn(); eq(world.Button.Size,squashSize)
+	for index=first+2,#environment.Delayed do environment.Delayed[index]() end
+	eq(world.Button.Position,world.ButtonRest); eq(world.Button.Size,world.ButtonRestSize)
+	for part,rest in pairs(world.PressRest) do eq(part.CFrame,rest.CFrame); eq(part.Size,rest.Size); eq(part.Transparency,rest.Transparency) end
 end)
 test("Desktop and mobile HUD, shop, and leaderboard use valid UI properties", function()
 	local UI = environment.load("src/client/UI.luau")
@@ -301,7 +364,9 @@ local function roundHarness(count)
 	local arena = env.load("src/server/World.luau").build()
 	local fakeEvent = { Id = "test", Name = "TEST HAZARD", Description = "Test", Duration = 10, MinPlayers = 1,
 		Run = function(context) table.insert(eventContexts, context); return function() end end }
-	env.Env.script = { Parent = { Events = { choose = function() return fakeEvent end, Definitions = { fakeEvent } } } }
+	local fakeOverload={Id="overload",Name="OVERLOAD",Description="Instant shock",Duration=0.5,MinPlayers=1,Instant=true,Category="Disaster",Run=function(context) table.insert(eventContexts,context);return function()end end}
+	local fakeEvents = { choose = function() return fakeEvent end, Definitions = { fakeEvent }, Overload=fakeOverload }
+	env.Env.script = { Parent = { Events = fakeEvents } }
 	local data = {
 		get = function(player) return profiles[player] end,
 		push = function() end,
@@ -328,7 +393,7 @@ local function roundHarness(count)
 		return player
 	end
 	for index = 1, count do add(index) end
-	return { Env = env, Round = rounds, World = arena, Players = list, Profiles = profiles, Outcomes = outcomes, Contexts = eventContexts, Messages = messages, Cues = cues, Add = add, Character = character }
+	return { Env = env, Round = rounds, World = arena, Players = list, Profiles = profiles, Outcomes = outcomes, Contexts = eventContexts, Messages = messages, Cues = cues, Add = add, Character = character, FakeEvents = fakeEvents, FakeEvent = fakeEvent }
 end
 local function pressTestHazard(h)
 	h.Env.time(105)
@@ -428,9 +493,9 @@ test("PvP lethal damage credits one KO and reward, then results list the winner"
 	local h=roundHarness(2);h.Round:start();pressTestHazard(h)
 	local attacker,victim=h.Players[1],h.Players[2]
 	local context=h.Contexts[1];context.Damage(victim,100,attacker);context.Damage(victim,100,attacker)
-	eq(h.Profiles[attacker].KOs,1);eq(h.Profiles[attacker].Tokens,30+Config.KnockoutTokens)
+	eq(h.Profiles[attacker].KOs,1);eq(h.Profiles[attacker].Tokens,30+Config.PressTokens+Config.KnockoutTokens)
 	h.Round:tick();eq(h.Round.State.Results.WinnerUserId,attacker.UserId)
-	eq(h.Round.State.Results.Rows[1].KOs,1);eq(h.Round.State.Results.Rows[1].Tokens,Config.KnockoutTokens+Config.WinnerTokens)
+	eq(h.Round.State.Results.Rows[1].KOs,1);eq(h.Round.State.Results.Rows[1].Tokens,Config.PressTokens+Config.KnockoutTokens+Config.WinnerTokens)
 end)
 test("Mystery roles and instructions go to their owner without replicated role leaks", function()
 	local h=roundHarness(3);h.Round:start();local sent={}
@@ -442,5 +507,56 @@ test("Mystery roles and instructions go to their owner without replicated role l
 	eq(h.Players[1]:GetAttribute("EventHint"),nil)
 	eq(sent[#sent].Player,h.Players[1]);eq(sent[#sent].Payload.Hint,"MURDERER: stay hidden")
 	for _,row in ipairs(h.Round.State.Roster) do assert(row.Role~="Murderer" and row.Role~="Sheriff") end
+end)
+test("The button reopens during a hazard and each accepted press earns exactly two tokens", function()
+	local h=roundHarness(2);h.Round:start();pressTestHazard(h)
+	local presser=h.Players[1];local first=h.Contexts[1]
+	h.Env.time(106);assert(not h.Round:startEvent(presser)) -- Own cooldown still applies.
+	h.Env.time(106.5);assert(h.Round:startEvent(presser))
+	eq(#h.Round.ActiveEvents,2);eq(#h.Round.State.ActiveEvents,2);assert(first.Active())
+	eq(h.Profiles[presser].Presses,2);eq(h.Profiles[presser].Tokens,30+2*Config.PressTokens)
+	assert(h.Round.State.ReadyAt< h.Round.ActiveEvents[1].EndsAt)
+	h.Env.time(115);h.Round:tick()
+	assert(not first.Active());assert(h.Contexts[2].Active());eq(#h.Round.State.ActiveEvents,1)
+	local tokens=h.Profiles[presser].Tokens;first.Award(presser,999);eq(h.Profiles[presser].Tokens,tokens)
+end)
+test("An overloaded button still rewards presses without cancelling active hazards or paying early survival rewards", function()
+	local h=roundHarness(2);h.Round:start();pressTestHazard(h)
+	local presser=h.Players[1]
+	for index=2,8 do h.Env.time(105+(index-1)*1.5);assert(h.Round:startEvent(presser)) end
+	eq(#h.Round.ActiveEvents,Config.MaxActiveEvents);eq(h.Round.State.EventCount,8)
+	eq(h.Profiles[presser].Tokens,30+8*Config.PressTokens);assert(h.Contexts[1].Active());assert(not h.Contexts[8].Active())
+	assert(h.Round.State.ThreatLevel>=3)
+end)
+test("Personal button effects replace only their presser's previous effect and expire independently", function()
+	local h=roundHarness(2);h.Round:start();local jobs,closed={},{}
+	h.FakeEvents.runPersonal=function(ctx,player)
+		table.insert(jobs,ctx)
+		return function()table.insert(closed,player)end,3,"A private mystery effect"
+	end
+	local packets={};h.Round.Context.Remotes.PrivateState={FireClient=function(_,player,payload)table.insert(packets,{Player=player,Payload=payload})end}
+	pressTestHazard(h);local p=h.Players[1];eq(#jobs,1)
+	h.Env.time(106.5);assert(h.Round:startEvent(p));eq(#closed,1);assert(not jobs[1].Active());assert(jobs[2].Active())
+	h.Env.time(110);h.Round:tick();eq(#closed,2);assert(not jobs[2].Active());eq(#h.Round.ActiveEvents,2)
+	local sawOwn=false
+	for _,packet in ipairs(packets) do if packet.Payload.PersonalHint then eq(packet.Player,p);sawOwn=true end end
+	assert(sawOwn)
+end)
+test("Small personal button penalties remain truthful at maximum disaster threat", function()
+	local h=roundHarness(2);h.Round:start();h.Round.State.ThreatLevel=5
+	h.FakeEvents.runPersonal=function(ctx,player)ctx.Damage(player,8);return function()end,2,"The button bit you: -8 health"end
+	pressTestHazard(h);eq(h.Players[1].Character:FindFirstChildOfClass("Humanoid").Health,92)
+end)
+test("An expired overlapping disaster cannot clear an active mystery role or its private hint", function()
+	local h=roundHarness(3);h.Round:start();pressTestHazard(h)
+	local first=h.Contexts[1];first.SetHint(h.Players[1],"Dodge the rain")
+	h.FakeEvent.Category="PvP";h.Env.time(106.5);assert(h.Round:startEvent(h.Players[1]))
+	local second=h.Contexts[2];local packets={}
+	h.Round.Context.Remotes.PrivateState={FireClient=function(_,player,payload)table.insert(packets,{Player=player,Payload=payload})end}
+	second.SetRole(h.Players[1],"Murderer");second.SetHint(h.Players[1],"Hide your knife")
+	h.Env.time(115);h.Round:tick();assert(second.Active());eq(h.Players[1]:GetAttribute("Role"),"Survivor")
+	local lastHint,lastRole
+	for _,packet in ipairs(packets)do if packet.Player==h.Players[1]then if packet.Payload.Hint~=nil then lastHint=packet.Payload.Hint end;if packet.Payload.Role~=nil then lastRole=packet.Payload.Role end end end
+	eq(lastHint,"Hide your knife");eq(lastRole,"Murderer")
 end)
 print("\n" .. passed .. " checks passed. Physics, input, and live DataStores require Studio / a published experience.")

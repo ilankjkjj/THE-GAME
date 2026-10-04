@@ -8,7 +8,7 @@ local Feedback = {}
 Feedback.__index = Feedback
 local activeController
 local profiles = {
-	press = { Shake = 0.1, Flash = 0.08, Color = Color3.fromRGB(255, 224, 185) },
+	press = { Shake = 0.18, Punch = 0.28, Flash = 0.1, Color = Color3.fromRGB(255, 224, 185) },
 	warning = { Shake = 0, Flash = 0.06, Color = Color3.fromRGB(255, 211, 183) },
 	impact = { Shake = 0.65, Flash = 0.18, Color = Color3.fromRGB(255, 229, 197) },
 	lightning = { Shake = 0.55, Flash = 0.3, Color = Color3.fromRGB(219, 235, 255) },
@@ -60,7 +60,7 @@ function Feedback.new(network, options)
 	options = options or {}
 	local self = setmetatable({
 		Subject = options.Subject or function() return Players.LocalPlayer end,
-		Clock = options.Clock or os.clock, Muted = false, Shake = 0, Flash = 0,
+		Clock = options.Clock or os.clock, Muted = false, Shake = 0, Punch = 0, Flash = 0,
 		Tint = Color3.new(1, 1, 1), Connections = {}, Sounds = {}, LastSounds = {},
 		Destroyed = false, WasParticipant = false,
 	}, Feedback)
@@ -151,6 +151,7 @@ function Feedback:cue(cue)
 	local profile = profiles[kind] or profiles.impact
 	local strength = math.clamp(finite(cue.Strength, 1), 0, 1.5) * attenuation
 	self.Shake = math.min(1, self.Shake + profile.Shake * strength)
+	self.Punch = math.min(0.22, self.Punch + (profile.Punch or 0) * strength)
 	self.Flash = math.min(0.45, self.Flash + profile.Flash * strength)
 	self.Tint = profile.Color
 	local played = self:play(kind, math.min(1, strength))
@@ -165,6 +166,7 @@ function Feedback:state(state)
 		if previous and previous.Phase ~= "Round" and self.WasParticipant then self:play("roundstart", 0.7) end
 	elseif previous and previous.Phase == "Round" then
 		self.Shake = 0
+		self.Punch = 0
 		local roundId = state.RoundId or state.RoundNumber
 		if self.WasParticipant and self.FinishCueRound ~= roundId then
 			local won = state.Results and state.Results.WinnerUserId == Players.LocalPlayer.UserId
@@ -189,19 +191,20 @@ function Feedback:step(delta)
 	local camera = self:attachCamera()
 	delta = math.clamp(finite(delta, 0.016), 0, 0.1)
 	self.Shake = math.max(0, self.Shake - delta * 2.6)
+	self.Punch = math.max(0, self.Punch - delta * 1.2)
 	self.Flash = math.max(0, self.Flash - delta * 1.8)
-	if not camera then self.Shake, self.Flash = 0, 0; return end
+	if not camera then self.Shake, self.Punch, self.Flash = 0, 0, 0; return end
 	local viewer = self:viewer()
-	if not self.State or self.State.Phase ~= "Round" or not viewer then self.Shake = 0; self.Flash = 0 end
+	if not self.State or self.State.Phase ~= "Round" or not viewer then self.Shake = 0; self.Punch = 0; self.Flash = 0 end
 	self.Bloom.Enabled = self.Flash > 0.001
 	self.Color.Enabled = self.Flash > 0.001
 	self.Bloom.Intensity = math.min(0.12, self.Flash * 0.26)
 	self.Color.Brightness = math.min(0.045, self.Flash * 0.1)
 	self.Color.Contrast = math.min(0.03, self.Flash * 0.06)
 	self.Color.TintColor = Color3.new(1, 1, 1):Lerp(self.Tint, math.min(0.07, self.Flash * 0.15))
-	if not camera or self.Shake <= 0 or camera.CameraType == Enum.CameraType.Scriptable then return end
+	if (self.Shake <= 0 and self.Punch <= 0) or camera.CameraType == Enum.CameraType.Scriptable then return end
 	local at, amplitude = self.Clock(), self.Shake
-	local offset = CFrame.new(math.sin(at * 67) * 0.36 * amplitude, math.sin(at * 53 + 1.3) * 0.26 * amplitude, math.sin(at * 41) * 0.08 * amplitude)
+	local offset = CFrame.new(math.sin(at * 67) * 0.36 * amplitude, math.sin(at * 53 + 1.3) * 0.26 * amplitude, math.sin(at * 41) * 0.08 * amplitude - self.Punch)
 		* CFrame.Angles(math.sin(at * 47) * 0.008 * amplitude, math.sin(at * 43) * 0.006 * amplitude, math.sin(at * 59) * 0.006 * amplitude)
 	self.LastCamera, self.LastBase = camera, camera.CFrame
 	self.LastApplied = camera.CFrame * offset

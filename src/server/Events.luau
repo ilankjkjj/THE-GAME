@@ -10,6 +10,51 @@ local GREEN = Color3.fromRGB(105, 240, 157)
 local PURPLE = Color3.fromRGB(185, 117, 255)
 local TOP = 30
 
+-- Property and private-status leases belong to individual event scopes. Removing
+-- an older event must not erase a newer event's ice, speed, role or instructions.
+local propertyLeases = setmetatable({}, { __mode = "k" })
+local roleLeases = setmetatable({}, { __mode = "k" })
+local hintLeases = setmetatable({}, { __mode = "k" })
+local function leaseProperty(owner, instance, property, value)
+	local properties = propertyLeases[instance]
+	if not properties then properties = {}; propertyLeases[instance] = properties end
+	local lease = properties[property]
+	if not lease then lease = { Base = instance[property], Entries = {} }; properties[property] = lease end
+	local owned
+	for _, entry in ipairs(lease.Entries) do if entry.Owner == owner then owned = entry; break end end
+	if not owned then owned = { Owner = owner }; table.insert(lease.Entries, owned) end
+	owned.Value = value
+	if lease.Entries[#lease.Entries] == owned then instance[property] = value; owned.Value = instance[property] end
+end
+local function releaseProperty(owner, instance, property)
+	local properties = propertyLeases[instance]
+	local lease = properties and properties[property]
+	if not lease then return end
+	local top = lease.Entries[#lease.Entries]
+	for index = #lease.Entries, 1, -1 do if lease.Entries[index].Owner == owner then table.remove(lease.Entries, index) end end
+	-- An external supply or persistent map change may have taken ownership.
+	-- Preserve that change rather than writing an obsolete snapshot over it.
+	if instance.Parent and top and top.Owner == owner and instance[property] == top.Value then
+		local previous = lease.Entries[#lease.Entries]
+		if previous then instance[property] = previous.Value; previous.Value = instance[property] else instance[property] = lease.Base end
+	end
+	if #lease.Entries == 0 then properties[property] = nil end
+	if next(properties) == nil then propertyLeases[instance] = nil end
+end
+local function privateLease(bank, scope, player, value, setter)
+	local entries = bank[player]
+	if not entries then entries = {}; bank[player] = entries end
+	for index = #entries, 1, -1 do if entries[index].Scope == scope then table.remove(entries, index) end end
+	if value ~= nil then table.insert(entries, { Scope = scope, Value = value, Setter = setter }) end
+	local top = entries[#entries]
+	if player.Parent then
+		-- Root's slot-aware setter must also clear this scope's own record.
+		setter(player, value)
+		if top and top.Scope ~= scope then top.Setter(player, top.Value) end
+	end
+	if #entries == 0 then bank[player] = nil end
+end
+
 local function flatDistance(a, b)
 	return Vector3.new(a.X - b.X, 0, a.Z - b.Z).Magnitude
 end
@@ -49,8 +94,8 @@ local function newScope(c, name)
 		self.Saved[instance] = self.Saved[instance] or {}
 		local saved = self.Saved[instance]
 		for property, value in pairs(properties) do
-			if saved[property] == nil then saved[property] = { instance[property] } end
-			instance[property] = value
+			saved[property] = true
+			leaseProperty(self, instance, property, value)
 		end
 	end
 	function s:restore(callback) table.insert(self.Restores, callback) end
@@ -71,8 +116,11 @@ local function newScope(c, name)
 	end
 	function s:hint(player, text)
 		if not player.Parent then return end
-		if c.SetHint then c.SetHint(player, text) else player:SetAttribute("EventHint", text) end
-		self.Hints[player] = text
+		local function setter(target, value)
+			if c.SetHint then c.SetHint(target, value) else target:SetAttribute("EventHint", value) end
+		end
+		privateLease(hintLeases, self, player, text, setter)
+		self.Hints[player] = setter
 	end
 	function s:spawn(callback)
 		local job = task.spawn(function() if self:active() then callback() end end)
@@ -130,7 +178,7 @@ local function newScope(c, name)
 		if not character then return end
 		local owned = self.Roles[player]
 		if owned and owned.Highlight then owned.Highlight:Destroy() end
-		c.SetRole(player, role)
+		privateLease(roleLeases, self, player, role, c.SetRole)
 		local highlight
 		if color then
 			highlight = Instance.new("Highlight")
@@ -148,13 +196,11 @@ local function newScope(c, name)
 	function s:buff(player, properties)
 		local character, humanoid = self:character(player)
 		if not humanoid then return end
-		local previous = {}
-		for property, value in pairs(properties) do previous[property] = humanoid[property]; humanoid[property] = value end
-		self:resource(player, character, function()
-			if player.Character == character and humanoid.Parent then
-				for property, value in pairs(previous) do humanoid[property] = value end
-				if previous.MaxHealth then humanoid.Health = math.min(humanoid.Health, humanoid.MaxHealth) end
-			end
+		local owner = {}
+		for property, value in pairs(properties) do leaseProperty(owner, humanoid, property, value) end
+		return self:resource(player, character, function()
+			for property in pairs(properties) do releaseProperty(owner, humanoid, property) end
+			if properties.MaxHealth and humanoid.Parent then humanoid.Health = math.min(humanoid.Health, humanoid.MaxHealth) end
 		end)
 	end
 	function s:close()
@@ -164,19 +210,14 @@ local function newScope(c, name)
 			if task.cancel and job ~= coroutine.running() and coroutine.status(job) ~= "dead" then pcall(task.cancel, job) end
 		end
 		for instance, properties in pairs(self.Saved) do
-			if instance.Parent then for property, value in pairs(properties) do instance[property] = value[1] end end
+			for property in pairs(properties) do releaseProperty(self, instance, property) end
 		end
-		-- Theme restoration runs after temporary surface mutations, so a saved
-		-- snow/alien palette cannot overwrite the restored daylight colors.
 		for index = #self.Restores, 1, -1 do self.Restores[index]() end
 		for player, role in pairs(self.Roles) do
-			if player.Character == role.Character and (not c.Active or c.Active()) and c.IsAlive(player) then c.SetRole(player, nil) end
+			privateLease(roleLeases, self, player, nil, c.SetRole)
 		end
-		for player, text in pairs(self.Hints) do
-			if player.Parent then
-				if c.SetHint then c.SetHint(player, nil)
-				elseif player:GetAttribute("EventHint") == text then player:SetAttribute("EventHint", nil) end
-			end
+		for player, setter in pairs(self.Hints) do
+			privateLease(hintLeases, self, player, nil, setter)
 		end
 		self.Container:Destroy()
 	end
@@ -533,22 +574,48 @@ local stagedIds = {
 	volcanic_eruption = true, ufo_invasion = true, kraken_attack = true,
 	blizzard = true, meteor_apocalypse = true, flash_flood = true, singularity = true,
 }
-local function add(id, name, description, duration, callback, minimum, weight)
+local conflicts = {
+	cops_robbers = { "roles", "movement" }, hot_potato = { "roles", "event_timer" }, cursed_crown = { "roles" },
+	freeze_tag = { "roles", "movement" }, murder_mystery = { "roles", "weapons", "movement" },
+	sword_duel = { "roles", "weapons" }, free_swords = { "roles", "weapons" },
+	battle_kit = { "roles", "weapons" }, blaster_brawl = { "roles", "weapons" },
+	rising_lava = { "waterline", "navigation" }, volcanic_eruption = { "waterline", "navigation" },
+	flash_flood = { "waterline", "navigation", "forced_motion" },
+	vanishing_islands = { "arena_geometry", "navigation" }, shrinking_islands = { "arena_geometry", "navigation" },
+	meteor_apocalypse = { "arena_geometry", "navigation" }, bridge_roulette = { "arena_geometry", "navigation" },
+	earthquake = { "arena_geometry", "forced_motion" },
+	laser_sweep = { "ground_sweep" }, spinner = { "ground_sweep" }, laser_grid = { "ground_sweep" }, shockwaves = { "ground_sweep" },
+	tornado = { "forced_motion" }, singularity = { "forced_motion" }, blizzard = { "forced_motion", "surface_style" },
+	ufo_invasion = { "forced_motion" }, tidal_wave = { "forced_motion", "navigation" },
+	moon_gravity = { "movement", "forced_motion" }, speed_frenzy = { "movement" },
+	rocket_jump = { "movement", "surface_style" }, slippery_islands = { "surface_style" },
+}
+local visualBudgets = {
+	volcanic_eruption = 82, flash_flood = 77, singularity = 66, meteor_apocalypse = 60,
+	kraken_attack = 58, ufo_invasion = 58, blizzard = 60, acid_rain = 52,
+	rising_lava = 50, tornado = 34, zombie_outbreak = 40, chicken_chase = 20,
+	free_swords = 48, blaster_brawl = 48, murder_mystery = 14, battle_kit = 14,
+	shockwaves = 75,
+}
+local function add(id, name, description, duration, callback, minimum, weight, metadata)
+	metadata = metadata or {}
+	local category = metadata.Category or (pvpIds[id] and "PvP" or (disasterIds[id] and "Disaster" or (reliefIds[id] and "Relief" or "Challenge")))
 	table.insert(definitions, {
 		Id = id, Name = name, Description = description, Duration = duration,
 		MinPlayers = minimum or 1, Weight = weight or 1,
-		Category = pvpIds[id] and "PvP" or (disasterIds[id] and "Disaster" or (reliefIds[id] and "Relief" or "Challenge")),
-		Intensity = duration > 20 and 3 or (reliefIds[id] and 1 or 2),
-		Cue = cues[id] or (reliefIds[id] and "relief" or "warning"),
+		Category = category,
+		Intensity = metadata.Intensity or (duration > 20 and 3 or (category == "Relief" and 1 or 2)),
+		Cue = metadata.Cue or cues[id] or (category == "Relief" and "relief" or "warning"),
+		Theme = metadata.Theme or themes[id],
+		Channel = metadata.Channel or (pvpIds[id] and "PvP" or (category == "Relief" and "Relief" or "ArenaHazard")),
+		ConflictKeys = metadata.ConflictKeys or conflicts[id] or {},
+		VisualBudget = metadata.VisualBudget or visualBudgets[id] or 30,
+		Persistent = metadata.Persistent == true,
 		Run = function(context, presser)
 			local scope = newScope(context, name)
 			local ok, err = pcall(function()
-				if themes[id] and context.World.theme then
-					scope:restore(function() context.World.theme("Normal") end)
-					context.World.theme(themes[id])
-				end
 				callback(scope, context, presser)
-				if not stagedIds[id] and context.SetStage and scope:active() then context.SetStage("Active", description) end
+				if not stagedIds[id] and not metadata.Staged and context.SetStage and scope:active() then context.SetStage("Active", description) end
 			end)
 			if not ok then scope:close(); error(err) end
 			return function() scope:close() end
@@ -725,7 +792,7 @@ add("musical_islands", "MUSICAL ISLANDS", "Get onto a GREEN island before the mu
 			if root then
 				local protected = false
 				for _, position in ipairs(safe) do if flatDistance(root.Position, position) <= 10 then protected = true; break end end
-				if not protected then s:hit(player, 35, 2, "music") end
+				if not protected then s:hit(player, 42, 2, "music") end
 			end
 		end
 	end)
@@ -1105,13 +1172,10 @@ add("freeze_tag", "FREEZE TAG", "The blue tagger can freeze survivors for two se
 		for _, player in ipairs(s:players()) do
 			local character, humanoid, root = s:character(player)
 			if root and player ~= tagger and not frozen[player] and flatDistance(root.Position, taggerRoot.Position) < 5.5 and math.abs(root.Position.Y - taggerRoot.Position.Y) < 5 and os.clock() >= (s.HitTimes["freeze:" .. player.UserId] or 0) then
-				local data = { Character = character, Humanoid = humanoid, Speed = humanoid.WalkSpeed, JumpPower = humanoid.JumpPower, JumpHeight = humanoid.JumpHeight, Until = os.clock() + 2 }
+				local data = { Until = os.clock() + 2 }
 				frozen[player] = data
-				data.Release = s:resource(player, character, function()
-					if player.Character == character and humanoid.Parent then humanoid.WalkSpeed = data.Speed; humanoid.JumpPower = data.JumpPower; humanoid.JumpHeight = data.JumpHeight end
-				end)
+				data.Release = s:buff(player, { WalkSpeed = 0, JumpPower = 0, JumpHeight = 0 })
 				s.HitTimes["freeze:" .. player.UserId] = os.clock() + 5
-				humanoid.WalkSpeed, humanoid.JumpPower, humanoid.JumpHeight = 0, 0, 0
 				s:role(player, "Frozen", BLUE)
 				s:hint(player, "Frozen! You thaw in two seconds")
 				c.Damage(player, 12)
@@ -1206,7 +1270,7 @@ add("volcanic_eruption", "VOLCANO: JUMP FOR YOUR LIFE", "Jump up the GREEN crate
 		lava.Position = Vector3.new(0, level - 1, 0)
 		for _, player in ipairs(s:players()) do
 			local _, _, root = s:character(player)
-			if root and root.Position.Y < level + 2 then s:hit(player, 14, 1, "volcanoLava") end
+			if root and root.Position.Y < level + 2 then s:hit(player, 20, 1, "volcanoLava") end
 		end
 	end)
 end, 1, 1.5)
@@ -1496,7 +1560,7 @@ add("flash_flood", "MONSOON: FLOAT OR FLEE", "Jump onto GREEN crates before wate
 			local _, _, root = s:character(player)
 			if root and root.Position.Y < level + 1.5 then
 				root.AssemblyLinearVelocity += Vector3.new(1.4, 1, 0.7)
-				s:hit(player, 10, 1, "flood")
+				s:hit(player, 16, 1, "flood")
 			end
 		end
 	end)
@@ -1635,12 +1699,197 @@ add("blaster_brawl", "FREE BLASTERS. BAD IDEA.", "Everyone receives a blaster. E
 	end
 end, 2, 2.3)
 
+local function randomSurvivor(s)
+	local players = s:players()
+	return #players > 0 and players[random:NextInteger(1, #players)] or nil
+end
+local function highlightSurvivor(s, player, color)
+	local character = s:character(player)
+	if not character then return end
+	local highlight = Instance.new("Highlight")
+	highlight.Name, highlight.Adornee = "PersonalMark", character
+	highlight.FillColor, highlight.OutlineColor, highlight.FillTransparency = color, color, 0.65
+	highlight.DepthMode = Enum.HighlightDepthMode.Occluded
+	highlight.Parent = s.Container
+	s:resource(player, character, function() highlight:Destroy() end)
+end
+local function mutation(kind, text, hint)
+	return function(s, c)
+		local houses = c.World.Houses or {}
+		if #houses == 0 or not c.World.mutateHouse then return end
+		local chosen = randomSurvivor(s)
+		local house = chosen and c.World.resolveHouse and c.World.resolveHouse(chosen)
+		local assigned = chosen and chosen:GetAttribute("HouseIndex")
+		house = house or (assigned and houses[assigned]) or houses[random:NextInteger(1, #houses)]
+		local index = house.Index
+		local owner = chosen and (chosen.DisplayName .. "'s house") or ("House " .. index)
+		local warning = marker(s, house.Platform.Position, 11, GOLD, "HouseMutationWarning")
+		label(s, warning, "HOUSE CHANGE INCOMING!", GOLD)
+		s:phase(text .. " " .. owner, hint .. " This change lasts until the round ends.", "warning", "Warning")
+		s:spawn(function()
+			if not s:wait(2.5) then return end
+			warning:Destroy()
+			if c.World.mutateHouse(index, kind) then
+				s:cue("impact", house.Platform.Position + Vector3.new(0, 5, 0), 1.2)
+				s:phase(owner .. " HAS CHANGED!", hint .. " The button can still cause more chaos.", "warning", "Active")
+			end
+		end)
+	end
+end
+local mutationMetadata = { Channel = "MapMutation", Category = "Challenge", ConflictKeys = { "house_transform" }, Persistent = true, VisualBudget = 1, Intensity = 2, Staged = true }
+add("house_lift", "YOUR HOUSE HAS AN ELEVATOR", "One cottage rises above its island. Get clear of the glowing target before the house moves; use its new ramp for cover.", 12, mutation("lift", "A HOUSE IS ABOUT TO RISE!", "Leave the gold circle while the cottage moves upward."), 1, 1.5, mutationMetadata)
+add("house_relocate", "WRONG ADDRESS", "A random cottage moves across its island. Watch the marked house and dodge its new position.", 12, mutation("relocate", "SOMEBODY'S HOUSE IS MOVING!", "Keep clear of the marked cottage until it settles."), 1, 1.5, mutationMetadata)
+add("house_shrink", "TINY HOUSE PROBLEM", "A cottage contracts into a cramped shelter. Escape before the gold warning ends, then find another hiding place.", 12, mutation("shrink", "THE HOUSE IS GETTING SMALLER!", "Exit the marked cottage before its walls shrink inward."), 1, 1.3, mutationMetadata)
+add("house_tilt", "ARCHITECTURE HAS LEFT THE CHAT", "One cottage tilts sideways. Leave its marked footprint before the shift; the unusual cover remains for this round.", 12, mutation("tilt", "A HOUSE IS LOSING ITS BALANCE!", "Leave the gold circle. The cottage is about to lean sideways."), 1, 1.5, mutationMetadata)
+add("house_paint", "PAINTBALL RENOVATION", "One cottage changes into a bright new color scheme. Its strange new look stays until the round ends.", 12, mutation("paint", "SURPRISE RENOVATION!", "The marked house is getting a new paint job."), 1, 0.75, mutationMetadata)
+
+add("iron_survivor", "ONE SURVIVOR IS BUILT DIFFERENT", "A random survivor receives temporary armor and extra health. Everyone can keep pressing the button.", 20, function(s, c)
+	local chosen = randomSurvivor(s)
+	local _, humanoid = s:character(chosen)
+	if not humanoid then return end
+	s:buff(chosen, { MaxHealth = humanoid.MaxHealth + 60 })
+	humanoid.Health = math.min(humanoid.MaxHealth, humanoid.Health + 60)
+	highlightSurvivor(s, chosen, BLUE)
+	s:hint(chosen, "IRON SURVIVOR: +60 armor health for twenty seconds. Stay in the fight.")
+	toast(c, chosen.DisplayName .. " just received iron armor!", "good")
+	s:cue("supply", chosen.Character.HumanoidRootPart.Position, 0.8)
+end, 1, 1.2, { Channel = "Targeted", Category = "Relief", ConflictKeys = { "target_armor" }, VisualBudget = 0, Intensity = 1 })
+
+add("rocket_boots", "ROCKET BOOTS: ONE SIZE", "One survivor gets huge jumps and extra speed. Take shortcuts carefully: a bad landing still eliminates you.", 18, function(s, c)
+	local chosen = randomSurvivor(s)
+	local _, humanoid, root = s:character(chosen)
+	if not root then return end
+	s:buff(chosen, { WalkSpeed = math.max(23, humanoid.WalkSpeed), JumpPower = 76, JumpHeight = 13 })
+	highlightSurvivor(s, chosen, GREEN)
+	s:hint(chosen, "ROCKET BOOTS: Your jumps are much stronger. Aim for solid ground!")
+	toast(c, chosen.DisplayName .. " received rocket boots!", "good")
+	s:cue("supply", root.Position, 0.8)
+end, 1, 1.25, { Channel = "Targeted", Category = "Relief", ConflictKeys = { "target_movement" }, VisualBudget = 0, Intensity = 1 })
+
+add("heavy_feet", "SOMEBODY GOT CONCRETE SHOES", "A random survivor slows down after three seconds. Stay near safety and survive the handicap for a token reward.", 18, function(s, c)
+	local chosen = randomSurvivor(s)
+	if not chosen then return end
+	highlightSurvivor(s, chosen, PURPLE)
+	s:hint(chosen, "CONCRETE SHOES: You slow down in three seconds. Reach a safe spot NOW.")
+	toast(c, chosen.DisplayName .. " is getting concrete shoes!")
+	s:spawn(function()
+		if not s:wait(3) or not s:character(chosen) then return end
+		s:buff(chosen, { WalkSpeed = 9 })
+		s:hint(chosen, "CONCRETE SHOES: Keep moving carefully. Survive to earn fifteen tokens.")
+		if s:wait(14) and s:character(chosen) then c.Award(chosen, 15, 0) end
+	end)
+end, 1, 1.35, { Channel = "Targeted", ConflictKeys = { "target_movement" }, VisualBudget = 0 })
+
+add("hunter_drone", "ONE VERY PERSONAL PROBLEM", "A hunting drone follows one marked survivor. Keep moving: it locks your last position, warns, then explodes there.", 22, function(s, c)
+	local chosen = randomSurvivor(s)
+	local _, _, target = s:character(chosen)
+	if not target then return end
+	highlightSurvivor(s, chosen, RED)
+	s:hint(chosen, "DRONE TARGET: Keep moving. Leave each red circle before the blast.")
+	toast(c, "A hunter drone has chosen " .. chosen.DisplayName .. "!")
+	local drone = s:part("HunterDrone", Vector3.new(3.4, 1.5, 3.4), target.Position + Vector3.new(0, 12, 0), PURPLE, Enum.Material.Metal)
+	glow(drone, RED, 1, 15)
+	local nextAttack = 3
+	s:loop(function(elapsed)
+		local _, _, root = s:character(chosen)
+		if not root then drone.Transparency = 1; return end
+		drone.CFrame = CFrame.new(root.Position + Vector3.new(math.sin(elapsed * 2) * 4, 12, math.cos(elapsed * 2) * 4)) * CFrame.Angles(0, elapsed * 2, 0)
+		if elapsed < nextAttack then return end
+		nextAttack = elapsed + 3.5
+		strike(s, root.Position, 6, 36, "bomb")
+	end)
+end, 1, 1.6, { Channel = "Targeted", Category = "Disaster", ConflictKeys = { "target_hunter" }, VisualBudget = 14, Intensity = 3 })
+
+add("gifted_railgun", "THE BUTTON CHOSE VIOLENCE", "One random survivor receives a powerful rail blaster. Hide behind a house, or close the distance while it reloads.", 24, function(s, c)
+	local chosen = randomSurvivor(s)
+	if not chosen then return end
+	s:hint(chosen, "RAIL BLASTER: Equip, face your target and click / tap. Shots hit hard but reload slowly.")
+	weapon(s, chosen, { Name = "Gifted Rail Blaster", Gun = true, Color = GOLD, Range = 105, Damage = 70, Cooldown = 1.8 })
+	toast(c, chosen.DisplayName .. " received a rail blaster. Houses block its shots!")
+end, 2, 2.2, { Channel = "PvP", Category = "PvP", ConflictKeys = { "weapons" }, VisualBudget = 12, Cue = "gunshot", Intensity = 3 })
+
+add("jackpot_runner", "RUN FOR YOUR MONEY", "One survivor gets a glowing jackpot. They earn tokens by running, but standing still too long hurts.", 20, function(s, c)
+	local chosen = randomSurvivor(s)
+	local _, _, root = s:character(chosen)
+	if not root then return end
+	highlightSurvivor(s, chosen, GOLD)
+	s:hint(chosen, "JACKPOT RUNNER: Move five studs each second to earn tokens. Standing still burns after three seconds.")
+	toast(c, chosen.DisplayName .. " must run for their jackpot!")
+	local last, idle, nextCheck = root.Position, 0, 3
+	s:loop(function(elapsed)
+		local _, _, current = s:character(chosen)
+		if not current or elapsed < nextCheck then return end
+		nextCheck = elapsed + 1
+		if flatDistance(last, current.Position) >= 5 then c.Award(chosen, 3, 0); idle = 0
+		else idle += 1; if idle >= 3 then s:hit(chosen, 14, 1, "jackpotIdle") end end
+		last = current.Position
+	end)
+end, 1, 1.6, { Channel = "Targeted", ConflictKeys = { "target_runner" }, VisualBudget = 0, Intensity = 2 })
+
+local personalEffects = {
+	{ Id = "tokens", Label = "+8 bonus tokens", Duration = 2, Run = function(s, c, player) c.Award(player, 8, 0) end },
+	{ Id = "heal", Label = "+20 health", Duration = 2, Run = function(s, _, player)
+		local _, humanoid = s:character(player); if humanoid then humanoid.Health = math.min(humanoid.MaxHealth, humanoid.Health + 20) end
+	end },
+	{ Id = "speed", Label = "Turbo legs: +7 speed for 8 seconds", Duration = 8, Run = function(s, _, player)
+		local _, humanoid = s:character(player); if humanoid then s:buff(player, { WalkSpeed = humanoid.WalkSpeed + 7 }) end
+	end },
+	{ Id = "jump", Label = "Spring legs: stronger jumps for 8 seconds", Duration = 8, Run = function(s, _, player)
+		local _, humanoid = s:character(player); if humanoid then s:buff(player, { JumpPower = humanoid.JumpPower + 18, JumpHeight = humanoid.JumpHeight + 3 }) end
+	end },
+	{ Id = "shield", Label = "Lucky shield: protected for 5 seconds", Duration = 5, Run = function(s, _, player)
+		local character = s:character(player); if not character then return end
+		local shield = Instance.new("ForceField"); shield.Name = "EventPersonalShield"; shield.Parent = character
+		s:resource(player, character, function() shield:Destroy() end)
+	end },
+	{ Id = "slow", Label = "Sticky shoes: slower for 6 seconds", Duration = 6, Run = function(s, _, player)
+		local _, humanoid = s:character(player); if humanoid then s:buff(player, { WalkSpeed = math.max(8, humanoid.WalkSpeed - 5) }) end
+	end },
+	{ Id = "sting", Label = "The button bit you: -8 health", Duration = 2, Run = function(_, c, player) c.Damage(player, 8) end },
+	{ Id = "marked", Label = "Glowing target: visible for 7 seconds", Duration = 7, Run = function(s, _, player) highlightSurvivor(s, player, RED) end },
+}
+-- Every real press has its own small consequence. Root owns expiration and
+-- replaces the presser's previous personal scope before creating a new one.
+function Events.runPersonal(context, presser)
+	if not presser or not context.IsAlive(presser) then return function() end, 0, "" end
+	local effect = personalEffects[random:NextInteger(1, #personalEffects)]
+	local scope = newScope(context, "Personal_" .. effect.Id)
+	local ok, err = pcall(function()
+		effect.Run(scope, context, presser)
+		if context.PersonalHint and scope:character(presser) then context.PersonalHint(presser, effect.Label, effect.Duration) end
+	end)
+	if not ok then scope:close(); error(err) end
+	return function() scope:close() end, effect.Duration, effect.Label
+end
+
+-- Saturating the arena hurts; repeatedly pressing never cancels a warning or
+-- removes a running hazard. This pulse has no delayed work or visual objects.
+Events.Overload = {
+	Id = "button_overload", Name = "BUTTON OVERLOAD",
+	Description = "Too much chaos: the button shocks nearby survivors.",
+	Category = "Disaster", Channel = "ArenaHazard", ConflictKeys = {}, VisualBudget = 0,
+	Intensity = 3, Cue = "impact", Instant = true, Duration = 0.5,
+	Run = function(c, presser)
+		if c.Active and not c.Active() then return function() end end
+		toast(c, "BUTTON OVERLOAD! The button shocks anyone standing nearby.", "bad")
+		local button = c.World.Button
+		local position = button and button.Position or Vector3.new(0, TOP + 2, 0)
+		for _, player in ipairs(c.Players()) do
+			local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+			if c.IsAlive(player) and root and (player == presser or (flatDistance(root.Position, position) <= 18 and math.abs(root.Position.Y - position.Y) <= 12)) then
+				c.Damage(player, player == presser and 14 or 10)
+			end
+		end
+		return function() end
+	end,
+}
+
 Events.Definitions = definitions
-function Events.choose(aliveCount, previousId, threatLevel, history)
+function Events.choose(aliveCount, previousId, threatLevel, history, activeDefinitions)
 	local recent = history
 	if not recent then
 		recent = previousId and { { Id = previousId } } or {}
 	end
-	return Director.select(definitions, aliveCount or 1, threatLevel or 1, recent, random)
+	return Director.select(definitions, aliveCount or 1, threatLevel or 1, recent, random, activeDefinitions)
 end
 return Events

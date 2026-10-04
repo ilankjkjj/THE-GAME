@@ -20,6 +20,9 @@ end
 local function clearPrivateState()
 	player:SetAttribute("PrivateRole", nil)
 	player:SetAttribute("PrivateHint", nil)
+	player:SetAttribute("PrivatePersonalHint", nil)
+	player:SetAttribute("PrivatePersonalEndsAt", nil)
+	player:SetAttribute("PrivatePressReadyAt", nil)
 end
 local feedback = require(script.Parent.Feedback).new(network, {
 	Subject = function() return watchedPlayer or player end,
@@ -100,6 +103,19 @@ connect(privateRemote.OnClientEvent, function(data)
 		if value == false then player:SetAttribute(attribute, nil)
 		elseif type(value) == "string" then player:SetAttribute(attribute, value) end
 	end
+	if data.PersonalHint == false then
+		player:SetAttribute("PrivatePersonalHint", nil)
+		player:SetAttribute("PrivatePersonalEndsAt", nil)
+	elseif type(data.PersonalHint) == "string" then
+		player:SetAttribute("PrivatePersonalHint", data.PersonalHint)
+		if data.PersonalEndsAt == nil then player:SetAttribute("PrivatePersonalEndsAt", workspace:GetServerTimeNow() + 6) end
+	end
+	for field, attribute in pairs({ PersonalEndsAt = "PrivatePersonalEndsAt", PressReadyAt = "PrivatePressReadyAt" }) do
+		local value = data[field]
+		if value == false then player:SetAttribute(attribute, nil)
+		elseif type(value) == "number" and value == value and math.abs(value) < math.huge then player:SetAttribute(attribute, value) end
+	end
+	if type(data.PressReadyAt) == "number" and data.PressReadyAt > workspace:GetServerTimeNow() then ui:pressFeedback() end
 	ui:tick(ui.Nearby)
 end)
 connect(network.Toast.OnClientEvent, function(...) ui:toast(...) end)

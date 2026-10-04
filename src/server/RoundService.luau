@@ -2,7 +2,6 @@ local Players = game:GetService("Players")
 local Shared = game:GetService("ReplicatedStorage"):WaitForChild("Shared")
 local Config = require(Shared.Config)
 local RoundRules = require(Shared.RoundRules)
-local Catalog = require(Shared.Catalog)
 local Economy = require(Shared.Economy)
 local Rules = require(Shared.Rules)
 local Director = require(Shared.DisasterDirector)
@@ -19,7 +18,7 @@ local function living(player)
 end
 function Rounds.new(context)
 	return setmetatable({
-		Context = context, Alive = {}, Entrants = {}, EventCleanup = nil, EventActive = false,
+		Context = context, Alive = {}, Entrants = {}, ActiveEvents = {}, PersonalEffects = {}, LastPlayerPress = {}, EventActive = false,
 		LastEventId = nil, History = {}, RoundId = 0, EventGeneration = 0, LastPublished = 0, KORecorded = {},
 		CueWindow = 0, CueCount = 0,
 		State = {
@@ -27,7 +26,7 @@ function Rounds.new(context)
 			RoundNumber = 0, RoundMode = "Last survivor", EventName = "YOUR NEXT ADVENTURE", EventDescription = "Join the queue. Survive the chaos. Be the last one standing.",
 			EventId = "idle", EventStage = "Idle", EventCategory = "", EventIntensity = 0, Presser = "", EventCount = 0, ThreatLevel = 1,
 			AliveCount = 0, RoundPlayers = 0, LobbyCount = 0, QueuedCount = 0,
-			Roster = {}, Winner = "", SuddenDeath = false,
+			Roster = {}, ActiveEvents = {}, Winner = "", SuddenDeath = false,
 		},
 	}, Rounds)
 end
@@ -180,74 +179,90 @@ function Rounds:eligible()
 	end)
 	return result
 end
-function Rounds:clearEvent(reward)
-	self.EventGeneration += 1
-	if self.EventCleanup then
-		local ok, err = pcall(self.EventCleanup)
+local themes = { lava_rise = "Inferno", volcano = "Eruption", volcanic_eruption = "Eruption", blizzard = "Blizzard", lightning = "Storm", acid_rain = "Storm", ufo_invasion = "Alien", meteor_apocalypse = "Inferno", flash_flood = "Storm", singularity = "Cosmic" }
+function Rounds:refreshEffects(player)
+	if not self:isAlive(player) then return end
+	local role, hint, priority, hintPriority = "Survivor", false, -1, -1
+	for _, slot in ipairs(self.ActiveEvents) do
+		if slot.Active then
+			local importance = slot.Definition.Category == "PvP" and 6 or 2
+			if slot.Roles[player] and importance >= priority then role, priority = slot.Roles[player], importance end
+			if slot.Hints[player] and importance >= hintPriority then hint, hintPriority = slot.Hints[player], importance end
+		end
+	end
+	self:setRole(player, role)
+	if self.Context.Remotes.PrivateState then self.Context.Remotes.PrivateState:FireClient(player, { Hint = hint, RoundId = self.RoundId }) end
+end
+function Rounds:syncEvents()
+	local public = {}
+	for _, slot in ipairs(self.ActiveEvents) do
+		if slot.Active then table.insert(public, { Id = slot.Definition.Id, Name = slot.Definition.Name, EndsAt = slot.EndsAt, Category = slot.Definition.Category, Intensity = slot.Definition.Intensity or 1 }) end
+	end
+	self.State.ActiveEvents = public
+	self.EventActive = #public > 0
+	local latest = self.ActiveEvents[#self.ActiveEvents]
+	if latest then
+		self.State.EventName, self.State.EventDescription, self.State.EventId = latest.Definition.Name, latest.Description, latest.Definition.Id
+		self.State.EventStage, self.State.EventCategory, self.State.EventIntensity = latest.Stage, latest.Definition.Category or "Disaster", latest.Definition.Intensity or 1
+		self.State.EventEndsAt = latest.EndsAt
+	elseif self.State.Phase == "Round" then
+		self.State.EventName, self.State.EventDescription, self.State.EventId = "DARE TO PRESS AGAIN?", "+2 tokens, another event, and a mystery effect just for you.", "breather"
+		self.State.EventStage, self.State.EventCategory, self.State.EventIntensity = "Cooldown", "", 0
+		self.State.EventEndsAt = 0
+	end
+	local chosen
+	for _, slot in ipairs(self.ActiveEvents) do
+		if slot.Active and (slot.Definition.Theme or themes[slot.Definition.Id]) then chosen = slot.Definition.Theme or themes[slot.Definition.Id] end
+	end
+	self.Context.World.theme(chosen or "Normal")
+end
+function Rounds:finishSlot(slot, reward)
+	if not slot.Active then return end
+	slot.Active = false
+	self:suspendSupplies()
+	if slot.Cleanup then
+		local ok, err = pcall(slot.Cleanup)
 		if not ok then warn("[Survival] Event cleanup: " .. tostring(err)) end
 	end
-	self.EventCleanup = nil
-	self.EventActive = false
-	self.Context.World.Effects:ClearAllChildren()
-	self.Context.World.resetArena()
-	self.Context.World.theme("Normal")
-	self.Context.Remotes.Countdown:FireAllClients(-1)
-	for _, player in ipairs(Players:GetPlayers()) do self:clearCharacterEffects(player) end
+	local index = table.find(self.ActiveEvents, slot)
+	if index then table.remove(self.ActiveEvents, index) end
+	if slot.PersonalPlayer and self.PersonalEffects[slot.PersonalPlayer] == slot then
+		self.PersonalEffects[slot.PersonalPlayer] = nil
+		if slot.PersonalPlayer.Parent == Players and self.Context.Remotes.PrivateState then
+			self.Context.Remotes.PrivateState:FireClient(slot.PersonalPlayer, { PersonalHint = false, PersonalEndsAt = 0, RoundId = self.RoundId })
+		end
+	end
+	if not slot.PersonalPlayer then
+		if reward then for _, player in ipairs(self:players()) do self:award(player, Config.SurvivalTokens) end end
+		if #self.ActiveEvents == 0 and self.Context.World.restoreTransientArena then self.Context.World.restoreTransientArena() end
+	end
+	self:syncEvents()
 	for _, player in ipairs(self:players()) do
-		self:setRole(player, "Survivor")
-		local _, humanoid = living(player)
-		if humanoid then humanoid.WalkSpeed = Config.BaseWalkSpeed; humanoid.JumpPower = Config.BaseJumpPower; humanoid.AutoRotate = true end
-		if reward then self:award(player, Config.SurvivalTokens) end
+		self:refreshEffects(player)
 		if self.Context.Supplies then self.Context.Supplies:reapply(player) end
 	end
-	self.State.ReadyAt = now() + Config.EventGap
-	if self.State.Phase == "Round" then
-		self.State.EventStage = "Cooldown"
-		self.State.EventName = "WHO WILL PRESS NEXT?"
-		self.State.EventDescription = "The next event starts when a survivor presses the button."
-		self.State.EventCategory, self.State.EventIntensity = "", 0
-		self.State.EventId = "breather"
-		if reward then self:cue("reward", self.Context.World.Button.Position, 0.1) end
+end
+function Rounds:suspendSupplies()
+	if self.Context.Supplies and self.Context.Supplies.suspend then
+		for _, player in ipairs(self:players()) do self.Context.Supplies:suspend(player) end
 	end
 end
-function Rounds:startEvent(presser, previewId)
-	if not presser and not previewId then return false end
-	if self.State.Phase ~= "Round" or self.State.SuddenDeath or self.EventActive or now() < self.State.ReadyAt then return false end
-	local activePlayers = self:players()
-	if #activePlayers == 0 then return false end
-	local event
-	if previewId then
-		if not self.Context.StudioPreview then return false end
-		for _, candidate in ipairs(Events.Definitions) do
-			if candidate.Id == previewId and #activePlayers >= candidate.MinPlayers then event = candidate; break end
-		end
-	else event = Events.choose(#activePlayers, self.LastEventId, self.State.ThreatLevel, self.History) end
-	if not event then return false end
-	if presser then
-		if not self:isAlive(presser) then return false end
-		local _, humanoid, root = living(presser)
-		local valid, reason = Rules.canPress(now(), self.State.ReadyAt, root and (root.Position - self.Context.World.Button.Position).Magnitude or math.huge, humanoid ~= nil and humanoid.Health > 0, self.Context.Data.get(presser) ~= nil, Config, true)
-		if not valid then self.Context.Remotes.Toast:FireClient(presser, reason, "info"); return false end
-		Economy.press(self.Context.Data.get(presser))
-		self.Context.Data.push(presser)
-	end
-	self.EventActive = true
-	self.EventGeneration += 1
-	self.State.EventCount += 1
-	self.State.EventName, self.State.EventDescription, self.State.EventId = event.Name, event.Description, event.Id
-	self.State.EventStage, self.State.EventCategory, self.State.EventIntensity = "Warning", event.Category or "Disaster", event.Intensity or 1
-	self.State.Presser = presser and presser.DisplayName or "THE ARENA"
-	self.State.ReadyAt = now() + event.Duration
-	self.LastEventId = event.Id
-	Director.remember(self.History, event)
+function Rounds:clearEvent(reward)
+	for _, slot in ipairs(table.clone(self.ActiveEvents)) do self:finishSlot(slot, reward) end
+	local personal = {}
+	for _, slot in pairs(self.PersonalEffects) do table.insert(personal, slot) end
+	for _, slot in ipairs(personal) do self:finishSlot(slot, false) end
+	self.Context.World.Effects:ClearAllChildren()
+	if self.Context.World.restoreTransientArena then self.Context.World.restoreTransientArena() end
+	self.Context.Remotes.Countdown:FireAllClients(-1)
+	self:syncEvents()
+end
+function Rounds:eventContext(slot)
 	local roundId = self.RoundId
-	local generation = self.EventGeneration
-	local function active()
-		return self.RoundId == roundId and self.State.Phase == "Round" and self.EventActive and self.EventGeneration == generation
-	end
-	local context = {
+	local function active() return slot.Active and self.RoundId == roundId and self.State.Phase == "Round" end
+	return {
 		World = self.Context.World, Data = self.Context.Data, Remotes = self.Context.Remotes,
-		State = self.State, RoundId = roundId,
+		State = self.State, RoundId = roundId, Generation = slot.Generation, EventId = slot.Definition.Id,
 		Players = function() return self:players() end,
 		IsAlive = function(player) return active() and self:isAlive(player) end,
 		Active = active,
@@ -257,7 +272,8 @@ function Rounds:startEvent(presser, previewId)
 			if type(amount) ~= "number" or amount ~= amount or amount <= 0 or amount == math.huge then return end
 			if attacker and (attacker == player or not self:isAlive(attacker)) then return end
 			local _, humanoid = living(player)
-			humanoid:TakeDamage(math.min(150, amount * (attacker and 1 or 1 + (self.State.ThreatLevel - 1) * 0.12)))
+			local danger = (attacker or slot.PersonalPlayer) and 1 or (1.2 + (self.State.ThreatLevel - 1) * 0.18 + math.max(0, math.min(3, #self.ActiveEvents - 1)) * 0.08)
+			humanoid:TakeDamage(math.min(150, amount * danger))
 			if humanoid.Health <= 0 and attacker and not self.KORecorded[player] then
 				self.KORecorded[player] = true
 				local earned = self.Context.Data.knockout(attacker) or 0
@@ -265,34 +281,105 @@ function Rounds:startEvent(presser, previewId)
 				if record then record.KOs += 1; record.Tokens += earned end
 				self:cue("knockout", nil, 0.5)
 			end
-			if humanoid.Health <= 0 then self:eliminate(player, "The event got you! Next round is queued.", false) end
+			if humanoid.Health <= 0 then self:eliminate(player, "The chaos got you! Next round is queued.", false) end
 		end,
 		Award = function(player, tokens) if active() and self:isAlive(player) then return self:award(player, tokens) end end,
-		SetRole = function(player, role) if active() and player.Parent == Players then self:setRole(player, role) end end,
+		SetRole = function(player, role)
+			if self.RoundId ~= roundId or player.Parent ~= Players or (not active() and role and role ~= "Survivor") then return end
+			slot.Roles[player] = role ~= "Survivor" and role or nil
+			self:refreshEffects(player)
+		end,
 		SetHint = function(player, hint)
-			if active() and player.Parent == Players and self.Context.Remotes.PrivateState then
-				self.Context.Remotes.PrivateState:FireClient(player, { Hint = hint or false, RoundId = self.RoundId })
+			if self.RoundId ~= roundId or player.Parent ~= Players or (not active() and hint) then return end
+			slot.Hints[player] = hint or nil
+			self:refreshEffects(player)
+		end,
+		PersonalHint = function(player, hint, duration)
+			if active() and self:isAlive(player) and self.Context.Remotes.PrivateState then
+				self.Context.Remotes.PrivateState:FireClient(player, { PersonalHint = hint or false, PersonalEndsAt = now() + math.clamp(duration or 6, 0, 30), RoundId = roundId })
 			end
 		end,
-		Publish = function() if active() then self:publish() end end,
+		Publish = function() if active() then self:syncEvents(); self:publish() end end,
 		Cue = function(kind, position, strength) if active() then self:cue(kind, position, strength) end end,
 		SetStage = function(stage, instruction)
 			if not active() or type(stage) ~= "string" then return end
-			if self.State.EventStage == stage and (not instruction or self.State.EventDescription == instruction) then return end
-			self.State.EventStage = stage
-			if type(instruction) == "string" then self.State.EventDescription = instruction end
-			self:publish()
+			slot.Stage = stage
+			if type(instruction) == "string" then slot.Description = instruction end
+			self:syncEvents(); self:publish()
 		end,
 	}
-	self.Context.World.press(Color3.fromRGB(196, 40, 28))
+end
+function Rounds:personal(presser)
+	if not Events.runPersonal or not self:isAlive(presser) then return end
+	if self.PersonalEffects[presser] then self:finishSlot(self.PersonalEffects[presser], false) end
+	self.EventGeneration += 1
+	local slot = { Active = true, PersonalPlayer = presser, Generation = self.EventGeneration, Definition = { Id = "personal" }, Roles = {}, Hints = {} }
+	self.PersonalEffects[presser] = slot
+	local context = self:eventContext(slot)
+	self:suspendSupplies()
+	local ok, cleanup, duration, label = xpcall(function() return Events.runPersonal(context, presser) end, debug.traceback)
+	if not ok then warn("[Button] Personal effect failed: " .. tostring(cleanup)); self:finishSlot(slot, false); return end
+	slot.Cleanup = type(cleanup) == "function" and cleanup or nil
+	slot.EndsAt = now() + math.clamp(duration or 6, 0.5, 30)
+	if label and self.Context.Remotes.PrivateState then
+		self.Context.Remotes.PrivateState:FireClient(presser, { PersonalHint = label, PersonalEndsAt = slot.EndsAt, RoundId = self.RoundId })
+	end
+	if self.Context.Supplies then for _, player in ipairs(self:players()) do self.Context.Supplies:reapply(player) end end
+end
+function Rounds:startEvent(presser, previewId)
+	if not presser and not previewId then return false end
+	if self.State.Phase ~= "Round" or self.State.SuddenDeath then return false end
+	local activePlayers = self:players()
+	if #activePlayers == 0 then return false end
+	if presser then
+		if not self:isAlive(presser) then return false end
+		local _, humanoid, root = living(presser)
+		local readyAt = math.max(self.State.ReadyAt, self.LastPlayerPress[presser] or 0)
+		local valid, reason = Rules.canPress(now(), readyAt, root and (root.Position - self.Context.World.Button.Position).Magnitude or math.huge, humanoid ~= nil and humanoid.Health > 0, self.Context.Data.get(presser) ~= nil, Config, true)
+		if not valid then self.Context.Remotes.Toast:FireClient(presser, reason, "info"); return false end
+	elseif not self.Context.StudioPreview then return false end
+	local event
+	if previewId then
+		if not self.Context.StudioPreview then return false end
+		for _, candidate in ipairs(Events.Definitions) do if candidate.Id == previewId and #activePlayers >= candidate.MinPlayers then event = candidate; break end end
+	else
+		local function choose()
+			local definitions = {}
+			for _, slot in ipairs(self.ActiveEvents) do table.insert(definitions, slot.Definition) end
+			return Events.choose(#activePlayers, self.LastEventId, self.State.ThreatLevel, self.History, definitions)
+		end
+		event = #self.ActiveEvents >= Config.MaxActiveEvents and Events.Overload or choose()
+		if not event then event = Events.Overload end
+	end
+	if not event then return false end
+	if presser then
+		Economy.press(self.Context.Data.get(presser))
+		self:award(presser, Config.PressTokens)
+		self.Context.Data.push(presser)
+		self.LastPlayerPress[presser] = now() + Config.PlayerPressCooldown
+		if self.Context.Remotes.PrivateState then self.Context.Remotes.PrivateState:FireClient(presser, { PressReadyAt = self.LastPlayerPress[presser], RoundId = self.RoundId }) end
+	end
+	self.EventGeneration += 1
+	local slot = { Active = true, Definition = event, Generation = self.EventGeneration, EndsAt = now() + event.Duration, Stage = "Warning", Description = event.Description, Roles = {}, Hints = {} }
+	if not event.Instant then table.insert(self.ActiveEvents, slot) end
+	self.State.EventCount += 1
+	self.State.ThreatLevel = math.max(self.State.ThreatLevel, math.clamp(1 + math.floor(self.State.EventCount / 3), 1, 5))
+	self.State.Presser = presser and presser.DisplayName or "STUDIO PREVIEW"
+	self.State.ReadyAt = now() + Config.PressCooldown
+	self.LastEventId = event.Id
+	Director.remember(self.History, event)
+	self.Context.World.press(Color3.fromRGB(255, 82, 103))
 	self.Context.PlaySound(presser)
 	self:cue(event.Cue or "eventStart", self.Context.World.Button.Position, 0.35)
-	self:publish()
-	local ok, cleanup = xpcall(function() return event.Run(context, presser or activePlayers[1]) end, debug.traceback)
-	if ok and type(cleanup) == "function" then self.EventCleanup = cleanup
-	elseif not ok then warn("[Survival] Event failed: " .. tostring(cleanup)); self:clearEvent(false) end
+	self:syncEvents(); self:publish()
+	self:suspendSupplies()
+	local ok, cleanup = xpcall(function() return event.Run(self:eventContext(slot), presser or activePlayers[1]) end, debug.traceback)
+	if ok and type(cleanup) == "function" then slot.Cleanup = cleanup
+	elseif not ok then warn("[Survival] Event failed: " .. tostring(cleanup)); self:finishSlot(slot, false) end
+	if event.Instant and slot.Active then self:finishSlot(slot, false) end
+	if presser then self:personal(presser) end
 	if self.Context.Supplies then for _, player in ipairs(self:players()) do self.Context.Supplies:reapply(player) end end
-	self:publish()
+	self:syncEvents(); self:publish()
 	return true
 end
 function Rounds:preview(eventId)
@@ -311,6 +398,8 @@ function Rounds:start()
 	self.Context.World.resetArena()
 	self.RoundId += 1
 	self.Alive, self.Entrants, self.KORecorded = {}, {}, {}
+	self.ActiveEvents, self.PersonalEffects, self.LastPlayerPress = {}, {}, {}
+	self.State.ActiveEvents = {}
 	self.State.RoundNumber += 1
 	self.State.Phase = "Round"
 	self.State.RoundEndsAt = now() + Config.RoundSeconds
@@ -319,8 +408,8 @@ function Rounds:start()
 	self.State.EventCount, self.State.ThreatLevel = 0, 1
 	self.State.SuddenDeath, self.State.Winner = false, ""
 	self.State.Results = nil
-	self.State.EventName = "SURVIVE THE ISLANDS"
-	self.State.EventDescription = "Press the button to start chaos. Events never start on their own."
+	self.State.EventName = "THE BUTTON IS CALLING"
+	self.State.EventDescription = "Each press: +2 tokens, another event, and a personal perk or penalty. Dare to stack the chaos?"
 	self.State.EventId = "round_start"
 	self.State.EventStage, self.State.EventCategory, self.State.EventIntensity = "Idle", "", 0
 	self.LastEventId, self.History = nil, {}
@@ -331,6 +420,7 @@ function Rounds:start()
 		self.Entrants[player] = { UserId = player.UserId, Name = player.DisplayName, Tokens = 0, KOs = 0 }
 		if self.Context.Obby then self.Context.Obby:reset(player) end
 		player:SetAttribute("QueuedAt", now() + index / 100)
+		player:SetAttribute("HouseIndex", index)
 		self:setStatus(player, "Playing")
 		self:setRole(player, "Survivor")
 		humanoid.Health = humanoid.MaxHealth
@@ -366,6 +456,7 @@ function Rounds:finish(outcome)
 	self.State.EventStage, self.State.EventCategory, self.State.EventIntensity = "Idle", "", 0
 	self:cue(winner and "victory" or "roundend", nil, 0.5)
 	self:clearEvent(false)
+	self.Context.World.resetArena()
 	local rows = {}
 	for player, record in pairs(self.Entrants) do
 		local survived = (outcome == "Winner" or outcome == "SoloSurvived") and table.find(survivors, player) ~= nil
@@ -386,6 +477,8 @@ function Rounds:finish(outcome)
 	self:publish()
 end
 function Rounds:removed(player)
+	if self.PersonalEffects[player] then self:finishSlot(self.PersonalEffects[player], false) end
+	self.LastPlayerPress[player] = nil
 	if self.Alive[player] then
 		self.Alive[player] = nil
 		local record = self.Entrants[player]
@@ -421,15 +514,19 @@ function Rounds:tick()
 	elseif state.Phase == "Results" then
 		if current >= state.PhaseEndsAt then state.Phase = "Waiting"; state.PhaseEndsAt = 0 end
 	elseif state.Phase == "Round" then
-		state.ThreatLevel = RoundRules.threat(Config.RoundSeconds - (state.RoundEndsAt - current), Config)
+		state.ThreatLevel = math.max(RoundRules.threat(Config.RoundSeconds - (state.RoundEndsAt - current), Config), math.clamp(1 + math.floor(state.EventCount / 3), 1, 5))
 		local outcome = RoundRules.outcome(#self:players(), state.RoundPlayers, current >= state.RoundEndsAt)
 		if outcome ~= "Continue" then self:finish(outcome); return end
-		if self.EventActive and current >= state.ReadyAt then self:clearEvent(true) end
+		for _, slot in ipairs(table.clone(self.ActiveEvents)) do if current >= slot.EndsAt then self:finishSlot(slot, true) end end
+		local expired = {}
+		for player, slot in pairs(self.PersonalEffects) do if not self:isAlive(player) or current >= slot.EndsAt then table.insert(expired, slot) end end
+		for _, slot in ipairs(expired) do self:finishSlot(slot, false) end
 	end
 	if current - self.LastPublished >= 0.5 then self:publish() end
 end
 function Rounds:shutdown()
 	self.State.Phase = "Waiting"
 	self:clearEvent(false)
+	self.Context.World.resetArena()
 end
 return Rounds
